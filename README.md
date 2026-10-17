@@ -1,0 +1,62 @@
+# PageLens (MVP)
+
+A plain-JS library that adds a chat widget to a page. When the user types what they're looking for, it scrolls to and highlights the most relevant element in the marked region, or says the answer isn't on this page.
+
+## Layout
+
+```
+src/                    the library source, one file per step
+  init.js                 1. config + finding the AI region
+  extract.js              2. describing visible elements and content
+  tree.js                 2b. page tree + read-only explorer tools
+  preview.js              query handler (preview mode until the LLM step)
+  widget.js               5. chat widget (Shadow DOM) + debug Tree view
+  main.js                 public debug API + startup
+build.js                joins src/ into dist/lib.js (no dependencies)
+dist/lib.js             the built file that pages include (generated; don't edit)
+demo/index.html         sample e-commerce homepage
+examples/               open-source React apps used for testing
+```
+
+## Building
+
+Pages load `dist/lib.js`, so rebuild after editing anything in `src/`:
+
+```sh
+node build.js           # build once
+node build.js --watch   # rebuild on every save (leave it running while you work)
+```
+
+## Running the demo
+
+1. Open `demo/index.html` and replace `YOUR_GEMINI_API_KEY` in the start `<script>` tag with your Gemini API key (from Google AI Studio). Use a key with a low spending limit, because anyone who views the page can see it. Don't commit the key.
+2. From the **project root** (not `demo/`), run:
+
+   ```sh
+   npx serve .
+   ```
+
+3. Open the URL it prints and add `/demo/`, e.g. `http://localhost:3000/demo/`.
+
+Serve the files over HTTP instead of opening them from `file://`. The demo loads the library from the absolute path `/dist/lib.js`, which only works when the server root is the project root.
+
+## Running the example apps
+
+Each app wraps its React root in the PageLens markers and serves the library from `public/pagelens/lib.js`, a symlink to `dist/lib.js`.
+
+```sh
+cd examples/storefront && npx vite --port 5173      # shop, data from FakeStoreAPI
+cd examples/shadcn-admin && npx vite --port 5174    # admin dashboard
+```
+
+On a fresh clone, install dependencies first: `npm install` in `storefront`, `npx pnpm install` in `shadcn-admin`.
+
+## Adding it to a page
+
+```html
+<script src="lib.js" data-start data-api-key="KEY" data-provider="gemini"></script>
+  ... the only content the assistant may read and point to ...
+<script data-pagelens-end></script>
+```
+
+Add `data-debug` to the start tag to get a Tree view in the widget, showing the page tree the explorer walks.
