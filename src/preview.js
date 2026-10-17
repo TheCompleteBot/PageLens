@@ -12,13 +12,15 @@ function jsonLines(list) {
 function answerQuery(query) {
   buildTree();
   var start = rootView();
-  var hits = tools.search(query);
-  return Promise.resolve({
-    text: 'Preview mode (no LLM yet). The explorer would start from this top level (' +
-      start.children.length + ' of ' + tree.byId.size + ' nodes) and call expand / read / search ' +
-      'to go deeper (max depth ' + MAX_DEPTH + ').',
-    detail: 'Top level:\n' + jsonLines(start.children) +
-      '\n\nsearch(' + JSON.stringify(query) + ') would return:\n' +
-      (hits.results.length ? jsonLines(hits.results) : '(no matches)')
+  return tools.search(query).then(function (hits) {
+    var status = hits.retrieval === 'hybrid' ? 'keyword + meaning' : 'keywords only (' + denseStatus() + ')';
+    return {
+      text: 'Preview mode (no LLM yet). The explorer would start from this top level (' +
+        start.children.length + ' of ' + tree.byId.size + ' nodes) and call expand / read / search ' +
+        'to go deeper (max depth ' + MAX_DEPTH + ').',
+      detail: 'Top level:\n' + jsonLines(start.children) +
+        '\n\nsearch(' + JSON.stringify(query) + ') would return [' + status + ']:\n' +
+        (hits.results.length ? jsonLines(hits.results) : '(no matches)')
+    };
   });
 }

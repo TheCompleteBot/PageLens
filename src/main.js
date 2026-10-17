@@ -18,8 +18,11 @@ if (!startMarker) {
       root: function () { return (tree || buildTree()) && rootView(); },
       expand: function (id) { return (tree || buildTree()) && tools.expand(id); },
       read: function (id) { return (tree || buildTree()) && tools.read(id); },
-      search: function (text) { return (tree || buildTree()) && tools.search(text); }
+      // Returns a Promise: await PageLens.tools.search('jacket').
+      search: function (text) { if (!tree) buildTree(); return tools.search(text); }
     },
+    // How keyword and meaning rankings placed each result, as a table.
+    debugSearch: debugSearch,
     // DOM node for a tree ID from the latest tree, e.g. PageLens.nodeFor('n12').
     nodeFor: function (id) { var n = tree && tree.byId.get(id); return n ? n.el : null; }
   };

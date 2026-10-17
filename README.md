@@ -9,6 +9,8 @@ src/                    the library source, one file per step
   init.js                 1. config + finding the AI region
   extract.js              2. describing visible elements and content
   tree.js                 2b. page tree + read-only explorer tools
+  gemini.js               Gemini REST client (embeddings for now)
+  search.js               hybrid search: BM25F + Gemini embeddings, merged with RRF
   preview.js              query handler (preview mode until the LLM step)
   widget.js               5. chat widget (Shadow DOM) + debug Tree view
   main.js                 public debug API + startup
@@ -60,3 +62,12 @@ On a fresh clone, install dependencies first: `npm install` in `storefront`, `np
 ```
 
 Add `data-debug` to the start tag to get a Tree view in the widget, showing the page tree the explorer walks.
+
+## Search
+
+The explorer's `search(text)` tool ranks nodes two ways and merges the rankings with Reciprocal Rank Fusion:
+
+- **Keywords (BM25F)**, local and free: exact words, rare words weighted higher.
+- **Meaning (embeddings)**: `gemini-embedding-001`, so "television" finds "TV". Page texts are embedded once per page and cached; later queries only embed the query.
+
+Without a usable key (none, a `YOUR_...` placeholder, or one the API rejects), search uses keywords only. In the console, `await PageLens.debugSearch('jacket')` shows how each ranking placed the results.

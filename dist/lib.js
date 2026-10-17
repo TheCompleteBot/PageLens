@@ -28,7 +28,8 @@
 
   // Read from the start tag's data-* attributes. main.js stops if there is no start tag.
   var config = {
-    apiKey: (startMarker && startMarker.getAttribute('data-api-key')) || '',
+    // A leftover placeholder like "YOUR_GEMINI_API_KEY" counts as no key.
+    apiKey: ((startMarker && startMarker.getAttribute('data-api-key')) || '').replace(/^YOUR_.*$/, ''),
     provider: ((startMarker && startMarker.getAttribute('data-provider')) || 'gemini').toLowerCase(),
     // data-debug on the start tag adds a Tree view to the widget (developer tool).
     debug: !!startMarker && startMarker.hasAttribute('data-debug')
@@ -631,10 +632,13 @@
     return s;
   }
 
-  // "Electronics > 20000mAh Power Bank, 22.5W fast charging"
+  // "Electronics > list (4) > 20000mAh Power Bank, 22.5W fast charging".
+  // Lists show as "list (N)": their preview label would waste tokens here.
   function pathOf(node) {
     var parts = [];
-    for (var n = node.parent; n; n = n.parent) parts.unshift(clean(nodeLabel(n), 40));
+    for (var n = node.parent; n; n = n.parent) {
+      parts.unshift(n.kind === 'list' ? 'list (' + n.children.length + ')' : clean(nodeLabel(n), 40));
+    }
     return parts.join(' > ');
   }
 
@@ -686,28 +690,128 @@
       return { id: found.node.id, text: lines.join('\n'), truncated: truncated };
     },
 
+    // Hybrid search (see search.js). Async, because the meaning half calls the
+    // embedding API. Each hit is reported once: a match inside a product card is
+    // returned as the card's record.
     search: function (text) {
-      var queryWords = words(text);
-      var results = [];
-      tree.byId.forEach(function (node) {
-        if (!node.data) return;
-        var score = scoreItem(node.data, queryWords);
-        if (score > 0) results.push({ node: node, score: score });
+      var t = tree; // The tree this search ran on, even if a new query rebuilds it meanwhile.
+      return hybridSearch(t, text, MAX_SEARCH).then(function (out) {
+        out.hits.forEach(function (hit) { t.seen.add(hit.node.id); });
+        return {
+          retrieval: out.retrieval,
+          results: out.hits.map(function (hit) {
+            var s = summarize(hit.node);
+            s.path = pathOf(hit.node);
+            s.via = hit.via;
+            return s;
+          })
+        };
       });
-      results.sort(function (a, b) { return b.score - a.score; });
-      results = results.slice(0, MAX_SEARCH);
-      markSeen(results.map(function (r) { return r.node; }));
-      return {
-        results: results.map(function (r) {
-          var s = summarize(r.node);
-          s.path = pathOf(r.node);
-          return s;
-        })
-      };
     }
   };
 
-  // Word matching used by search(). Words that say nothing about what the user wants:
+  // The whole tree as indented text, for debugging.
+  function treeToText(nodes, indent) {
+    return nodes.map(function (node) {
+      return (indent || '') + node.id + ' ' + nodeTag(node) + ': ' + nodeLabel(node) + '\n' +
+        treeToText(node.children, (indent || '') + '  ');
+    }).join('');
+  }
+
+  // Logs the full tree. Run PageLens.debug() in the console.
+  function debugTree() {
+    buildTree();
+    console.log(LOG_PREFIX, tree.byId.size + ' nodes\n' + treeToText(tree.roots));
+    return tree;
+  }
+
+  // ---- src/gemini.js ----
+
+  // Gemini REST client — the provider adapter. For now it only does text
+  // embeddings (used by search); the explorer step will add generation here.
+  // Docs: https://ai.google.dev/gemini-api/docs/embeddings
+
+  var GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/';
+  var EMBEDDING_MODEL = 'gemini-embedding-001'; // text-only; supports RETRIEVAL_* task types
+  var EMBEDDING_DIMENSIONS = 768;              // one of the recommended sizes (768 / 1536 / 3072)
+  var EMBEDDING_BATCH = 100;                   // texts per batchEmbedContents request
+
+  // True when this provider can produce embeddings with the configured key.
+  function canEmbed() {
+    return config.provider === 'gemini' && !!config.apiKey;
+  }
+
+  // POSTs to a Gemini model method and returns the parsed JSON. Throws on HTTP errors,
+  // with the status on err.status so callers can tell a bad key (4xx) from a blip.
+  function geminiPost(model, method, body) {
+    return fetch(GEMINI_BASE + model + ':' + method, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': config.apiKey },
+      body: JSON.stringify(body)
+    }).then(function (res) {
+      if (res.ok) return res.json();
+      return res.text().then(function (detail) {
+        var err = new Error('Gemini ' + method + ' failed: HTTP ' + res.status + ' ' + detail.slice(0, 200));
+        err.status = res.status;
+        throw err;
+      });
+    });
+  }
+
+  // Unit length, so a dot product is the cosine similarity. Required for
+  // gemini-embedding-001 at sizes below 3072.
+  function normalizeVector(values) {
+    var norm = Math.sqrt(values.reduce(function (sum, v) { return sum + v * v; }, 0)) || 1;
+    return values.map(function (v) { return v / norm; });
+  }
+
+  // Embeds [{ text, taskType }] (taskType: 'RETRIEVAL_DOCUMENT' or 'RETRIEVAL_QUERY').
+  // Returns a Promise of normalized vectors in the same order.
+  function embedTexts(inputs) {
+    var batches = [];
+    for (var i = 0; i < inputs.length; i += EMBEDDING_BATCH) batches.push(inputs.slice(i, i + EMBEDDING_BATCH));
+    return Promise.all(batches.map(function (batch) {
+      return geminiPost(EMBEDDING_MODEL, 'batchEmbedContents', {
+        requests: batch.map(function (input) {
+          return {
+            model: 'models/' + EMBEDDING_MODEL,
+            content: { parts: [{ text: input.text }] },
+            taskType: input.taskType,
+            outputDimensionality: EMBEDDING_DIMENSIONS
+          };
+        })
+      }).then(function (json) {
+        return json.embeddings.map(function (e) { return normalizeVector(e.values); });
+      });
+    })).then(function (parts) { return [].concat.apply([], parts); });
+  }
+
+  // ---- src/search.js ----
+
+  // Hybrid search behind the search() tool:
+  //   1. BM25F keyword ranking   (exact words: "CHG90", "express")
+  //   2. embedding ranking       (meaning: "television" ~ "TV"), via Gemini
+  //   3. Reciprocal Rank Fusion  merges the two rankings by position
+  // If embeddings are unavailable (no key, other provider, API error), search
+  // falls back to keyword ranking alone.
+
+  var BM25_K1 = 1.2;       // how quickly repeated words stop adding score
+  var BM25_B = 0.75;       // how much longer fields are penalized
+  var FIELD_WEIGHTS = { own: 3, near: 2, context: 1 }; // BM25F: a word in a node's own text counts most
+  var RRF_K = 60;          // standard RRF constant: score = sum of 1 / (RRF_K + rank)
+  var CANDIDATES = 20;     // hits taken from each ranking before fusion
+  var MAX_DOC_TEXT = 300;  // characters embedded per search document
+  // Embedding hits below this cosine similarity are dropped, so a query with no
+  // real match (e.g. "return policy") doesn't pull in the "least unrelated" nodes.
+  // Provisional: tune once tested against real queries with a key.
+  var DENSE_MIN_SIMILARITY = 0.55;
+
+  var embeddingCache = new Map(); // document text -> vector; kept across queries on this page
+  var denseDisabled = '';         // set after a key/permission error, so we stop retrying
+
+  // ---- Words ----
+
+  // Words that say nothing about what the user is looking for.
   var STOPWORDS = new Set(('a an and any are be buy can do does find for from get have how i in is it ' +
     'looking me much my need of on or please show some the there this to want what where which with you').split(' '));
 
@@ -723,36 +827,179 @@
       .map(stem);
   }
 
-  // How well an item matches the search words. A word found in the item's own text
-  // counts most, then the heading it sits under, then its section.
-  function scoreItem(data, queryWords) {
-    var fields = [[words(data.text + ' ' + (data.label || '')), 3], [words(data.near), 2], [words(data.section), 1]];
-    return queryWords.reduce(function (score, qw) {
-      var best = 0;
-      fields.forEach(function (field) {
-        var hit = field[0].some(function (w) {
-          // Prefix match for longer words: "deliver" ~ "delivery", "trim" ~ "trimmer".
-          return w === qw || (qw.length >= 4 && w.length >= 4 && (w.indexOf(qw) === 0 || qw.indexOf(w) === 0));
-        });
-        if (hit) best = Math.max(best, field[1]);
+  // Equal, or for longer words a prefix match: "deliver" ~ "delivery", "trim" ~ "trimmer".
+  function wordsMatch(queryWord, word) {
+    return word === queryWord ||
+      (queryWord.length >= 4 && word.length >= 4 && (word.indexOf(queryWord) === 0 || queryWord.indexOf(word) === 0));
+  }
+
+  // ---- Search documents ----
+
+  // A hit inside a card is reported as the card, so a product appears once (with
+  // its price etc. under it) rather than as both card and title. A card is a
+  // record, or a small titled group whose children are all leaves.
+  function isCard(node) {
+    return node.kind === 'record' ||
+      (node.kind === 'group' && !!node.title && node.children.every(function (c) { return !c.children.length; }));
+  }
+
+  function resultUnit(node) {
+    for (var n = node; n; n = n.parent) if (isCard(n)) return n;
+    return node;
+  }
+
+  // One document per searchable unit: every card, and every item not inside a card.
+  // Fields: own (its label), near (heading just above it), context (its section,
+  // and for cards the text of everything inside).
+  function searchDocs(t) {
+    var docs = [];
+    t.byId.forEach(function (node) {
+      var isUnit = isCard(node) || (node.kind === 'item' && resultUnit(node) === node);
+      if (!isUnit) return;
+      var own = nodeLabel(node);
+      var near = node.data && node.data.near || '';
+      var context = (node.data && node.data.section) || '';
+      if (isCard(node)) {
+        var inner = [];
+        (function collect(n) {
+          n.children.forEach(function (child) {
+            if (child.data && child.data.text && child.data.text !== own) inner.push(child.data.text);
+            collect(child);
+          });
+        })(node);
+        context = (context + ' ' + inner.join(' ')).trim();
+      }
+      if (!own && !context) return;
+      docs.push({
+        node: node,
+        fields: { own: words(own), near: words(near), context: words(context) },
+        // What gets embedded: the label, then its section / contents. Not `near`: the
+        // heading above a loose link can be a neighbouring product, which would make
+        // "See all electronics" look like a TV.
+        text: clean([own, context].filter(Boolean).join(' — '), MAX_DOC_TEXT)
       });
-      return score + best;
-    }, 0);
+    });
+    return docs;
   }
 
-  // The whole tree as indented text, for debugging.
-  function treeToText(nodes, indent) {
-    return nodes.map(function (node) {
-      return (indent || '') + node.id + ' ' + nodeTag(node) + ': ' + nodeLabel(node) + '\n' +
-        treeToText(node.children, (indent || '') + '  ');
-    }).join('');
+  // ---- 1. BM25F ----
+
+  // Returns [{ doc, score }] sorted best first, only docs that match at least one query word.
+  function bm25Rank(docs, query) {
+    var queryWords = Array.from(new Set(words(query)));
+    var n = docs.length;
+    var avgLength = {};
+    Object.keys(FIELD_WEIGHTS).forEach(function (field) {
+      avgLength[field] = docs.reduce(function (sum, d) { return sum + d.fields[field].length; }, 0) / (n || 1) || 1;
+    });
+
+    var scores = docs.map(function () { return 0; });
+    queryWords.forEach(function (qw) {
+      // Weighted, length-normalized term frequency per doc (BM25F), summed over fields.
+      var tf = docs.map(function (doc) {
+        return Object.keys(FIELD_WEIGHTS).reduce(function (sum, field) {
+          var tokens = doc.fields[field];
+          var count = tokens.filter(function (w) { return wordsMatch(qw, w); }).length;
+          if (!count) return sum;
+          var norm = 1 - BM25_B + BM25_B * tokens.length / avgLength[field];
+          return sum + FIELD_WEIGHTS[field] * count / norm;
+        }, 0);
+      });
+      var df = tf.filter(function (x) { return x > 0; }).length;
+      if (!df) return;
+      // Rare words count more: a word in 1 of 80 docs outweighs one in 20 of 80.
+      var idf = Math.log(1 + (n - df + 0.5) / (df + 0.5));
+      tf.forEach(function (x, i) { if (x > 0) scores[i] += idf * x / (BM25_K1 + x); });
+    });
+
+    return docs.map(function (doc, i) { return { doc: doc, score: scores[i] }; })
+      .filter(function (hit) { return hit.score > 0; })
+      .sort(function (a, b) { return b.score - a.score; });
   }
 
-  // Logs the full tree. Run PageLens.debug() in the console.
-  function debugTree() {
-    buildTree();
-    console.log(LOG_PREFIX, tree.byId.size + ' nodes\n' + treeToText(tree.roots));
-    return tree;
+  // ---- 2. Embeddings ----
+
+  // Returns a Promise of [{ doc, score }] sorted by cosine similarity, or null when
+  // embeddings aren't available (the reason is in denseStatus()).
+  function denseRank(docs, query) {
+    if (!canEmbed() || denseDisabled) return Promise.resolve(null);
+    var missing = Array.from(new Set(docs.map(function (d) { return d.text; })
+      .filter(function (text) { return !embeddingCache.has(text); })));
+    // New documents and the query go in the same request(s).
+    var inputs = missing.map(function (text) { return { text: text, taskType: 'RETRIEVAL_DOCUMENT' }; });
+    inputs.push({ text: query, taskType: 'RETRIEVAL_QUERY' });
+
+    return embedTexts(inputs).then(function (vectors) {
+      missing.forEach(function (text, i) { embeddingCache.set(text, vectors[i]); });
+      var queryVector = vectors[vectors.length - 1];
+      return docs.map(function (doc) {
+        var v = embeddingCache.get(doc.text);
+        var dot = 0;
+        for (var i = 0; i < v.length; i++) dot += v[i] * queryVector[i];
+        return { doc: doc, score: dot };
+      })
+        .filter(function (hit) { return hit.score >= DENSE_MIN_SIMILARITY; })
+        .sort(function (a, b) { return b.score - a.score; });
+    }).catch(function (err) {
+      // A 4xx means a bad key or no access: stop trying. Anything else may be a blip.
+      if (err.status >= 400 && err.status < 500) denseDisabled = err.message;
+      console.warn(LOG_PREFIX, 'Embedding search unavailable, using keywords only.', err.message);
+      return null;
+    });
+  }
+
+  function denseStatus() {
+    if (config.provider !== 'gemini') return 'provider "' + config.provider + '" has no embeddings';
+    if (!config.apiKey) return 'no API key';
+    return denseDisabled || '';
+  }
+
+  // ---- 3. Fusion ----
+
+  // Searches tree t. Returns a Promise of
+  //   { retrieval: 'hybrid' | 'keyword-only', hits: [{ node, via, ranks, rrf }] }
+  // where via says which rankings found it ("keyword", "meaning", or both).
+  function hybridSearch(t, query, limit) {
+    var docs = searchDocs(t);
+    var keyword = bm25Rank(docs, query).slice(0, CANDIDATES);
+    return denseRank(docs, query).then(function (dense) {
+      var fused = new Map();
+      function add(list, name) {
+        list.forEach(function (hit, i) {
+          var entry = fused.get(hit.doc) || { node: hit.doc.node, rrf: 0, ranks: {}, scores: {} };
+          entry.rrf += 1 / (RRF_K + i + 1);
+          entry.ranks[name] = i + 1;
+          entry.scores[name] = Math.round(hit.score * 1000) / 1000;
+          fused.set(hit.doc, entry);
+        });
+      }
+      add(keyword, 'keyword');
+      if (dense) add(dense.slice(0, CANDIDATES), 'meaning');
+
+      var hits = Array.from(fused.values())
+        .sort(function (a, b) { return b.rrf - a.rrf; })
+        .slice(0, limit);
+      hits.forEach(function (hit) { hit.via = Object.keys(hit.ranks).join('+'); });
+      return { retrieval: dense ? 'hybrid' : 'keyword-only', hits: hits };
+    });
+  }
+
+  // Logs how each ranking placed the results. Run PageLens.debugSearch('query').
+  function debugSearch(query) {
+    var t = tree || buildTree();
+    return hybridSearch(t, query, CANDIDATES).then(function (out) {
+      var status = denseStatus();
+      console.log(LOG_PREFIX, 'search(' + JSON.stringify(query) + '): ' + out.retrieval + (status ? ' (' + status + ')' : ''));
+      console.table(out.hits.map(function (hit) {
+        return {
+          id: hit.node.id, kind: nodeTag(hit.node), text: clean(nodeLabel(hit.node), 50),
+          keywordRank: hit.ranks.keyword || '', keywordScore: hit.scores.keyword || '',
+          meaningRank: hit.ranks.meaning || '', similarity: hit.scores.meaning || '',
+          rrf: Math.round(hit.rrf * 10000) / 10000
+        };
+      }));
+      return out;
+    });
   }
 
   // ---- src/preview.js ----
@@ -771,14 +1018,16 @@
   function answerQuery(query) {
     buildTree();
     var start = rootView();
-    var hits = tools.search(query);
-    return Promise.resolve({
-      text: 'Preview mode (no LLM yet). The explorer would start from this top level (' +
-        start.children.length + ' of ' + tree.byId.size + ' nodes) and call expand / read / search ' +
-        'to go deeper (max depth ' + MAX_DEPTH + ').',
-      detail: 'Top level:\n' + jsonLines(start.children) +
-        '\n\nsearch(' + JSON.stringify(query) + ') would return:\n' +
-        (hits.results.length ? jsonLines(hits.results) : '(no matches)')
+    return tools.search(query).then(function (hits) {
+      var status = hits.retrieval === 'hybrid' ? 'keyword + meaning' : 'keywords only (' + denseStatus() + ')';
+      return {
+        text: 'Preview mode (no LLM yet). The explorer would start from this top level (' +
+          start.children.length + ' of ' + tree.byId.size + ' nodes) and call expand / read / search ' +
+          'to go deeper (max depth ' + MAX_DEPTH + ').',
+        detail: 'Top level:\n' + jsonLines(start.children) +
+          '\n\nsearch(' + JSON.stringify(query) + ') would return [' + status + ']:\n' +
+          (hits.results.length ? jsonLines(hits.results) : '(no matches)')
+      };
     });
   }
 
@@ -1050,8 +1299,11 @@
         root: function () { return (tree || buildTree()) && rootView(); },
         expand: function (id) { return (tree || buildTree()) && tools.expand(id); },
         read: function (id) { return (tree || buildTree()) && tools.read(id); },
-        search: function (text) { return (tree || buildTree()) && tools.search(text); }
+        // Returns a Promise: await PageLens.tools.search('jacket').
+        search: function (text) { if (!tree) buildTree(); return tools.search(text); }
       },
+      // How keyword and meaning rankings placed each result, as a table.
+      debugSearch: debugSearch,
       // DOM node for a tree ID from the latest tree, e.g. PageLens.nodeFor('n12').
       nodeFor: function (id) { var n = tree && tree.byId.get(id); return n ? n.el : null; }
     };

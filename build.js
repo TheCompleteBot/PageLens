@@ -12,7 +12,7 @@ var path = require('path');
 
 // Order matters: init.js must come first (it captures document.currentScript),
 // and main.js last (it starts everything once all functions are defined).
-var FILES = ['init.js', 'extract.js', 'tree.js', 'preview.js', 'widget.js', 'main.js'];
+var FILES = ['init.js', 'extract.js', 'tree.js', 'gemini.js', 'search.js', 'preview.js', 'widget.js', 'main.js'];
 
 var SRC = path.join(__dirname, 'src');
 var OUT = path.join(__dirname, 'dist', 'lib.js');
@@ -51,6 +51,11 @@ build();
 if (process.argv.includes('--watch')) {
   console.log('Watching src/ for changes. Press Ctrl+C to stop.');
   var timer = null;
+  // A running watcher keeps the FILES list it started with, so changes to this
+  // script itself need a restart.
+  fs.watch(__filename, function () {
+    console.warn('build.js changed: stop this watcher (Ctrl+C) and start it again to pick up the change.');
+  });
   fs.watch(SRC, function () {
     // Editors often write a file in several steps; wait for them to finish.
     clearTimeout(timer);

@@ -13,7 +13,8 @@ var startMarker = document.currentScript || document.querySelector(START_SELECTO
 
 // Read from the start tag's data-* attributes. main.js stops if there is no start tag.
 var config = {
-  apiKey: (startMarker && startMarker.getAttribute('data-api-key')) || '',
+  // A leftover placeholder like "YOUR_GEMINI_API_KEY" counts as no key.
+  apiKey: ((startMarker && startMarker.getAttribute('data-api-key')) || '').replace(/^YOUR_.*$/, ''),
   provider: ((startMarker && startMarker.getAttribute('data-provider')) || 'gemini').toLowerCase(),
   // data-debug on the start tag adds a Tree view to the widget (developer tool).
   debug: !!startMarker && startMarker.hasAttribute('data-debug')

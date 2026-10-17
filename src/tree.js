@@ -265,10 +265,13 @@ function summarize(node) {
   return s;
 }
 
-// "Electronics > 20000mAh Power Bank, 22.5W fast charging"
+// "Electronics > list (4) > 20000mAh Power Bank, 22.5W fast charging".
+// Lists show as "list (N)": their preview label would waste tokens here.
 function pathOf(node) {
   var parts = [];
-  for (var n = node.parent; n; n = n.parent) parts.unshift(clean(nodeLabel(n), 40));
+  for (var n = node.parent; n; n = n.parent) {
+    parts.unshift(n.kind === 'list' ? 'list (' + n.children.length + ')' : clean(nodeLabel(n), 40));
+  }
   return parts.join(' > ');
 }
 
@@ -320,59 +323,25 @@ var tools = {
     return { id: found.node.id, text: lines.join('\n'), truncated: truncated };
   },
 
+  // Hybrid search (see search.js). Async, because the meaning half calls the
+  // embedding API. Each hit is reported once: a match inside a product card is
+  // returned as the card's record.
   search: function (text) {
-    var queryWords = words(text);
-    var results = [];
-    tree.byId.forEach(function (node) {
-      if (!node.data) return;
-      var score = scoreItem(node.data, queryWords);
-      if (score > 0) results.push({ node: node, score: score });
+    var t = tree; // The tree this search ran on, even if a new query rebuilds it meanwhile.
+    return hybridSearch(t, text, MAX_SEARCH).then(function (out) {
+      out.hits.forEach(function (hit) { t.seen.add(hit.node.id); });
+      return {
+        retrieval: out.retrieval,
+        results: out.hits.map(function (hit) {
+          var s = summarize(hit.node);
+          s.path = pathOf(hit.node);
+          s.via = hit.via;
+          return s;
+        })
+      };
     });
-    results.sort(function (a, b) { return b.score - a.score; });
-    results = results.slice(0, MAX_SEARCH);
-    markSeen(results.map(function (r) { return r.node; }));
-    return {
-      results: results.map(function (r) {
-        var s = summarize(r.node);
-        s.path = pathOf(r.node);
-        return s;
-      })
-    };
   }
 };
-
-// Word matching used by search(). Words that say nothing about what the user wants:
-var STOPWORDS = new Set(('a an and any are be buy can do does find for from get have how i in is it ' +
-  'looking me much my need of on or please show some the there this to want what where which with you').split(' '));
-
-// Crude stemming so "charges" matches "charge" and "bulbs" matches "bulb".
-function stem(word) {
-  return word.length > 4 ? word.replace(/(ing|es|ed|s)$/, '') : word;
-}
-
-// Lowercase word stems, without stopwords.
-function words(text) {
-  return (String(text || '').toLowerCase().match(/[\p{L}\p{N}]+/gu) || [])
-    .filter(function (w) { return !STOPWORDS.has(w); })
-    .map(stem);
-}
-
-// How well an item matches the search words. A word found in the item's own text
-// counts most, then the heading it sits under, then its section.
-function scoreItem(data, queryWords) {
-  var fields = [[words(data.text + ' ' + (data.label || '')), 3], [words(data.near), 2], [words(data.section), 1]];
-  return queryWords.reduce(function (score, qw) {
-    var best = 0;
-    fields.forEach(function (field) {
-      var hit = field[0].some(function (w) {
-        // Prefix match for longer words: "deliver" ~ "delivery", "trim" ~ "trimmer".
-        return w === qw || (qw.length >= 4 && w.length >= 4 && (w.indexOf(qw) === 0 || qw.indexOf(w) === 0));
-      });
-      if (hit) best = Math.max(best, field[1]);
-    });
-    return score + best;
-  }, 0);
-}
 
 // The whole tree as indented text, for debugging.
 function treeToText(nodes, indent) {
