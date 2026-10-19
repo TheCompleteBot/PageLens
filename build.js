@@ -25,14 +25,20 @@ var ENV = path.join(__dirname, '.env');
 var RELEASE = process.argv.includes('--release');
 
 // GEMINI_API_KEY from .env, or '' (no file, no such line, or a release build).
+// When .env exists but has no usable line, warns with the variable names it does
+// contain (names only, never values), so a typo is easy to spot.
+var warnedAboutEnv = '';
 function readDevKey() {
   if (RELEASE) return '';
-  try {
-    var match = fs.readFileSync(ENV, 'utf8').match(/^\s*GEMINI_API_KEY\s*=\s*["']?([^"'\s#]+)/m);
-    return match ? match[1] : '';
-  } catch (err) {
-    return '';
-  }
+  var env;
+  try { env = fs.readFileSync(ENV, 'utf8'); } catch (err) { return ''; }
+  var match = env.match(/^\s*GEMINI_API_KEY\s*=\s*["']?([^"'\s#]+)/m);
+  if (match) return match[1];
+  var names = (env.match(/^\s*[A-Za-z_][A-Za-z0-9_]*/gm) || []).map(function (n) { return n.trim(); });
+  var hint = '.env has no GEMINI_API_KEY=... line' + (names.length ? ' (found: ' + names.join(', ') + ')' : '') + '.';
+  if (hint !== warnedAboutEnv) console.warn(hint);
+  warnedAboutEnv = hint;
+  return '';
 }
 
 var BANNER = [
