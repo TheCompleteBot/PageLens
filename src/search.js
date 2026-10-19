@@ -11,13 +11,27 @@ var FIELD_WEIGHTS = { own: 3, near: 2, context: 1 }; // BM25F: a word in a node'
 var RRF_K = 60;          // standard RRF constant: score = sum of 1 / (RRF_K + rank)
 var CANDIDATES = 20;     // hits taken from each ranking before fusion
 var MAX_DOC_TEXT = 300;  // characters embedded per search document
-// Embedding hits below this cosine similarity are dropped, so a query with no
-// real match (e.g. "return policy") doesn't pull in the "least unrelated" nodes.
-// Provisional: tune once tested against real queries with a key.
-var DENSE_MIN_SIMILARITY = 0.55;
+// Which embedding hits to keep. Measured on our three test pages with
+// gemini-embedding-001: relevant top hits scored 0.61-0.74 and irrelevant ones
+// 0.60-0.64, so no fixed cutoff separates them. Embeddings therefore only rank
+// candidates; deciding "not on this page" is the explorer LLM's job. A hit is
+// kept if it's close to this query's best hit AND clearly above this query's
+// typical similarity, which trims the long tail of unrelated nodes.
+var DENSE_TOP_WINDOW = 0.04;     // keep hits within this of the best similarity...
+var DENSE_MEDIAN_MARGIN = 0.03;  // ...and at least this far above the median
+var MAX_MEANING_HITS = 5;        // at most this many meaning hits go into fusion
+var RATE_LIMIT_PAUSE_MS = 60000; // after a 429, use keywords only for this long
 
 var embeddingCache = new Map(); // document text -> vector; kept across queries on this page
+var lastDenseStats = null;      // similarity spread of the latest query, for debugSearch()
+
+// Top, median and 90th-percentile similarity of hits sorted best first.
+function similarityStats(sorted) {
+  function at(fraction) { return sorted.length ? Math.round(sorted[Math.floor(fraction * (sorted.length - 1))].score * 1000) / 1000 : 0; }
+  return { top: at(0), p90: at(0.1), median: at(0.5) };
+}
 var denseDisabled = '';         // set after a key/permission error, so we stop retrying
+var densePausedUntil = 0;       // set after a 429 (rate limit), which is temporary
 
 // ---- Words ----
 
@@ -132,7 +146,7 @@ function bm25Rank(docs, query) {
 // Returns a Promise of [{ doc, score }] sorted by cosine similarity, or null when
 // embeddings aren't available (the reason is in denseStatus()).
 function denseRank(docs, query) {
-  if (!canEmbed() || denseDisabled) return Promise.resolve(null);
+  if (!canEmbed() || denseDisabled || Date.now() < densePausedUntil) return Promise.resolve(null);
   var missing = Array.from(new Set(docs.map(function (d) { return d.text; })
     .filter(function (text) { return !embeddingCache.has(text); })));
   // New documents and the query go in the same request(s).
@@ -142,18 +156,27 @@ function denseRank(docs, query) {
   return embedTexts(inputs).then(function (vectors) {
     missing.forEach(function (text, i) { embeddingCache.set(text, vectors[i]); });
     var queryVector = vectors[vectors.length - 1];
-    return docs.map(function (doc) {
+    var all = docs.map(function (doc) {
       var v = embeddingCache.get(doc.text);
       var dot = 0;
       for (var i = 0; i < v.length; i++) dot += v[i] * queryVector[i];
       return { doc: doc, score: dot };
-    })
-      .filter(function (hit) { return hit.score >= DENSE_MIN_SIMILARITY; })
-      .sort(function (a, b) { return b.score - a.score; });
+    }).sort(function (a, b) { return b.score - a.score; });
+    lastDenseStats = similarityStats(all);
+    var cutoff = Math.max(lastDenseStats.top - DENSE_TOP_WINDOW, lastDenseStats.median + DENSE_MEDIAN_MARGIN);
+    return all.filter(function (hit) { return hit.score >= cutoff; }).slice(0, MAX_MEANING_HITS);
   }).catch(function (err) {
-    // A 4xx means a bad key or no access: stop trying. Anything else may be a blip.
-    if (err.status >= 400 && err.status < 500) denseDisabled = err.message;
-    console.warn(LOG_PREFIX, 'Embedding search unavailable, using keywords only.', err.message);
+    if (err.status === 429) {
+      // Rate limit / quota: temporary. Pause, then try again.
+      densePausedUntil = Date.now() + RATE_LIMIT_PAUSE_MS;
+      console.warn(LOG_PREFIX, 'Embedding rate limit hit; keywords only for ' + RATE_LIMIT_PAUSE_MS / 1000 + ' s.');
+    } else if (err.status >= 400 && err.status < 500) {
+      // Bad key, no access, or a rejected request: retrying won't help.
+      denseDisabled = err.message;
+      console.warn(LOG_PREFIX, 'Embedding search unavailable, using keywords only.', err.message);
+    } else {
+      console.warn(LOG_PREFIX, 'Embedding request failed, keywords only for this search.', err.message);
+    }
     return null;
   });
 }
@@ -161,7 +184,9 @@ function denseRank(docs, query) {
 function denseStatus() {
   if (config.provider !== 'gemini') return 'provider "' + config.provider + '" has no embeddings';
   if (!config.apiKey) return 'no API key';
-  return denseDisabled || '';
+  if (denseDisabled) return denseDisabled;
+  if (Date.now() < densePausedUntil) return 'rate limited, retrying in ' + Math.ceil((densePausedUntil - Date.now()) / 1000) + ' s';
+  return '';
 }
 
 // ---- 3. Fusion ----
@@ -199,7 +224,9 @@ function debugSearch(query) {
   var t = tree || buildTree();
   return hybridSearch(t, query, CANDIDATES).then(function (out) {
     var status = denseStatus();
-    console.log(LOG_PREFIX, 'search(' + JSON.stringify(query) + '): ' + out.retrieval + (status ? ' (' + status + ')' : ''));
+    var spread = out.retrieval === 'hybrid' && lastDenseStats ?
+      ' · similarity top ' + lastDenseStats.top + ', p90 ' + lastDenseStats.p90 + ', median ' + lastDenseStats.median : '';
+    console.log(LOG_PREFIX, 'search(' + JSON.stringify(query) + '): ' + out.retrieval + (status ? ' (' + status + ')' : '') + spread);
     console.table(out.hits.map(function (hit) {
       return {
         id: hit.node.id, kind: nodeTag(hit.node), text: clean(nodeLabel(hit.node), 50),
