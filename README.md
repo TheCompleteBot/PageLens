@@ -11,6 +11,7 @@ src/                    the library source, one file per step
   tree.js                 2b. page tree + read-only explorer tools
   gemini.js               Gemini REST client (embeddings for now)
   search.js               hybrid search: BM25F + Gemini embeddings, merged with RRF
+  trace.js                developer trace: logs each query's journey to the console
   preview.js              query handler (preview mode until the LLM step)
   widget.js               5. chat widget (Shadow DOM) + debug Tree view
   main.js                 public debug API + startup
@@ -26,7 +27,7 @@ Pages load `dist/lib.js`, which is generated and not committed. Build it after c
 
 ```sh
 node build.js             # build once
-node build.js --watch     # rebuild on every save (leave it running while you work)
+node build.js --watch     # rebuild on every save (leave it running; it restarts itself if build.js changes)
 node build.js --release   # build without the development API key (for anything you share or deploy)
 ```
 
@@ -72,7 +73,10 @@ On a fresh clone, install dependencies first: `npm install` in `storefront`, `np
 <script data-pagelens-end></script>
 ```
 
-Add `data-debug` to the start tag to get a Tree view in the widget, showing the page tree the explorer walks.
+Add `data-debug` to the start tag for developer tools:
+
+- a **Tree** view in the widget, showing the page tree the explorer walks;
+- a **query trace** in the browser console. Every chat query prints one group: the tree, the query words, the keyword ranking (BM25F scores), the meaning ranking (similarities, cutoff, cache use), rank fusion (RRF), and what the explorer receives. `await PageLens.tools.search('...')` in the console prints the search part.
 
 ## Search
 

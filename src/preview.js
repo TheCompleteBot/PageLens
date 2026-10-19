@@ -10,14 +10,24 @@ function jsonLines(list) {
 // Answers a query. Returns a Promise of { text, detail? } for the chat widget.
 // TEMPORARY (until the LLM step): shows what the explorer would start with.
 function answerQuery(query) {
+  var started = performance.now();
   buildTree();
+  var treeMs = Math.round(performance.now() - started);
+  var t = tree;
   var start = rootView();
-  return tools.search(query).then(function (hits) {
+  var journey = null;
+  return tools.search(query, { quiet: true, onJourney: function (j) { journey = j; } }).then(function (hits) {
+    if (config.debug) {
+      logQueryJourney({
+        query: query, tree: t, treeMs: treeMs, journey: journey, results: hits.results,
+        rootView: start, totalMs: Math.round(performance.now() - started)
+      });
+    }
     var status = hits.retrieval === 'hybrid' ? 'keyword + meaning' : 'keywords only (' + denseStatus() + ')';
     return {
       text: 'Preview mode (no LLM yet). The explorer would start from this top level (' +
-        start.children.length + ' of ' + tree.byId.size + ' nodes) and call expand / read / search ' +
-        'to go deeper (max depth ' + MAX_DEPTH + ').',
+        start.children.length + ' of ' + t.byId.size + ' nodes) and call expand / read / search ' +
+        'to go deeper (max depth ' + MAX_DEPTH + ').' + (config.debug ? ' Full journey in the console.' : ''),
       detail: 'Top level:\n' + jsonLines(start.children) +
         '\n\nsearch(' + JSON.stringify(query) + ') would return [' + status + ']:\n' +
         (hits.results.length ? jsonLines(hits.results) : '(no matches)')

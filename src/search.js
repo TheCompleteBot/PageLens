@@ -23,7 +23,6 @@ var MAX_MEANING_HITS = 5;        // at most this many meaning hits go into fusio
 var RATE_LIMIT_PAUSE_MS = 60000; // after a 429, use keywords only for this long
 
 var embeddingCache = new Map(); // document text -> vector; kept across queries on this page
-var lastDenseStats = null;      // similarity spread of the latest query, for debugSearch()
 
 // Top, median and 90th-percentile similarity of hits sorted best first.
 function similarityStats(sorted) {
@@ -143,15 +142,22 @@ function bm25Rank(docs, query) {
 
 // ---- 2. Embeddings ----
 
-// Returns a Promise of [{ doc, score }] sorted by cosine similarity, or null when
-// embeddings aren't available (the reason is in denseStatus()).
+// Returns a Promise of { hits, info }:
+//   hits  [{ doc, score }] kept after the cutoff, best first; null if embeddings
+//         weren't used (no key, paused, failed)
+//   info  what happened, for the developer trace: status, reason, how many texts
+//         were embedded vs cached, request time, similarity spread, cutoff, and the
+//         top similarities including the ones that were cut
 function denseRank(docs, query) {
-  if (!canEmbed() || denseDisabled || Date.now() < densePausedUntil) return Promise.resolve(null);
+  var skipReason = denseStatus();
+  if (skipReason) return Promise.resolve({ hits: null, info: { status: 'skipped', reason: skipReason } });
+
   var missing = Array.from(new Set(docs.map(function (d) { return d.text; })
     .filter(function (text) { return !embeddingCache.has(text); })));
   // New documents and the query go in the same request(s).
   var inputs = missing.map(function (text) { return { text: text, taskType: 'RETRIEVAL_DOCUMENT' }; });
   inputs.push({ text: query, taskType: 'RETRIEVAL_QUERY' });
+  var started = performance.now();
 
   return embedTexts(inputs).then(function (vectors) {
     missing.forEach(function (text, i) { embeddingCache.set(text, vectors[i]); });
@@ -162,9 +168,17 @@ function denseRank(docs, query) {
       for (var i = 0; i < v.length; i++) dot += v[i] * queryVector[i];
       return { doc: doc, score: dot };
     }).sort(function (a, b) { return b.score - a.score; });
-    lastDenseStats = similarityStats(all);
-    var cutoff = Math.max(lastDenseStats.top - DENSE_TOP_WINDOW, lastDenseStats.median + DENSE_MEDIAN_MARGIN);
-    return all.filter(function (hit) { return hit.score >= cutoff; }).slice(0, MAX_MEANING_HITS);
+    var stats = similarityStats(all);
+    var cutoff = Math.max(stats.top - DENSE_TOP_WINDOW, stats.median + DENSE_MEDIAN_MARGIN);
+    var kept = all.filter(function (hit) { return hit.score >= cutoff; }).slice(0, MAX_MEANING_HITS);
+    return {
+      hits: kept,
+      info: {
+        status: 'used', embeddedNew: missing.length, cached: docs.length - missing.length,
+        ms: Math.round(performance.now() - started), stats: stats, cutoff: cutoff,
+        ranked: all.slice(0, 12).map(function (hit) { return { doc: hit.doc, score: hit.score, kept: kept.indexOf(hit) !== -1 }; })
+      }
+    };
   }).catch(function (err) {
     if (err.status === 429) {
       // Rate limit / quota: temporary. Pause, then try again.
@@ -177,7 +191,7 @@ function denseRank(docs, query) {
     } else {
       console.warn(LOG_PREFIX, 'Embedding request failed, keywords only for this search.', err.message);
     }
-    return null;
+    return { hits: null, info: { status: 'failed', reason: err.message.slice(0, 160) } };
   });
 }
 
@@ -192,9 +206,11 @@ function denseStatus() {
 // ---- 3. Fusion ----
 
 // Searches tree t. Returns a Promise of
-//   { retrieval: 'hybrid' | 'keyword-only', hits: [{ node, via, ranks, rrf }] }
-// where via says which rankings found it ("keyword", "meaning", or both).
+//   { retrieval: 'hybrid' | 'keyword-only', hits: [{ node, via, ranks, scores, rrf }], journey }
+// where via says which rankings found it ("keyword", "meaning", or both), and
+// journey records every step for the developer trace (trace.js).
 function hybridSearch(t, query, limit) {
+  var started = performance.now();
   var docs = searchDocs(t);
   var keyword = bm25Rank(docs, query).slice(0, CANDIDATES);
   return denseRank(docs, query).then(function (dense) {
@@ -209,32 +225,28 @@ function hybridSearch(t, query, limit) {
       });
     }
     add(keyword, 'keyword');
-    if (dense) add(dense.slice(0, CANDIDATES), 'meaning');
+    if (dense.hits) add(dense.hits, 'meaning');
 
-    var hits = Array.from(fused.values())
-      .sort(function (a, b) { return b.rrf - a.rrf; })
-      .slice(0, limit);
-    hits.forEach(function (hit) { hit.via = Object.keys(hit.ranks).join('+'); });
-    return { retrieval: dense ? 'hybrid' : 'keyword-only', hits: hits };
+    var ranked = Array.from(fused.values()).sort(function (a, b) { return b.rrf - a.rrf; });
+    ranked.forEach(function (hit) { hit.via = Object.keys(hit.ranks).join('+'); });
+    return {
+      retrieval: dense.hits ? 'hybrid' : 'keyword-only',
+      hits: ranked.slice(0, limit),
+      journey: {
+        query: query, queryWords: Array.from(new Set(words(query))), docs: docs.length,
+        keyword: keyword, dense: dense.info, fused: ranked, limit: limit,
+        ms: Math.round(performance.now() - started)
+      }
+    };
   });
 }
 
-// Logs how each ranking placed the results. Run PageLens.debugSearch('query').
+// Prints the full search journey for a query, whether or not data-debug is on.
+// Run: await PageLens.debugSearch('television')
 function debugSearch(query) {
   var t = tree || buildTree();
-  return hybridSearch(t, query, CANDIDATES).then(function (out) {
-    var status = denseStatus();
-    var spread = out.retrieval === 'hybrid' && lastDenseStats ?
-      ' · similarity top ' + lastDenseStats.top + ', p90 ' + lastDenseStats.p90 + ', median ' + lastDenseStats.median : '';
-    console.log(LOG_PREFIX, 'search(' + JSON.stringify(query) + '): ' + out.retrieval + (status ? ' (' + status + ')' : '') + spread);
-    console.table(out.hits.map(function (hit) {
-      return {
-        id: hit.node.id, kind: nodeTag(hit.node), text: clean(nodeLabel(hit.node), 50),
-        keywordRank: hit.ranks.keyword || '', keywordScore: hit.scores.keyword || '',
-        meaningRank: hit.ranks.meaning || '', similarity: hit.scores.meaning || '',
-        rrf: Math.round(hit.rrf * 10000) / 10000
-      };
-    }));
+  return hybridSearch(t, query, MAX_SEARCH).then(function (out) {
+    logSearchJourney(out.journey);
     return out;
   });
 }

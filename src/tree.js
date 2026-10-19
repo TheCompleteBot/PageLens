@@ -326,11 +326,14 @@ var tools = {
   // Hybrid search (see search.js). Async, because the meaning half calls the
   // embedding API. Each hit is reported once: a match inside a product card is
   // returned as the card's record.
-  search: function (text) {
+  // options (optional): { quiet: true } skips the developer trace;
+  // onJourney(journey) receives the step-by-step record (used by the query trace).
+  search: function (text, options) {
+    options = options || {};
     var t = tree; // The tree this search ran on, even if a new query rebuilds it meanwhile.
     return hybridSearch(t, text, MAX_SEARCH).then(function (out) {
       out.hits.forEach(function (hit) { t.seen.add(hit.node.id); });
-      return {
+      var result = {
         retrieval: out.retrieval,
         results: out.hits.map(function (hit) {
           var s = summarize(hit.node);
@@ -339,6 +342,9 @@ var tools = {
           return s;
         })
       };
+      if (options.onJourney) options.onJourney(out.journey);
+      if (config.debug && !options.quiet) logSearchJourney(out.journey, result.results);
+      return result;
     });
   }
 };
