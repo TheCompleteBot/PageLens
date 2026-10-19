@@ -2,8 +2,13 @@
 // Joins the source files in src/ into the one file host pages include: dist/lib.js.
 // No dependencies. The files share one scope, wrapped in a single IIFE.
 //
-//   node build.js           build once
-//   node build.js --watch   rebuild whenever a file in src/ changes
+//   node build.js             build once
+//   node build.js --watch     rebuild whenever a file in src/ (or .env) changes
+//   node build.js --release   build without the development API key
+//
+// Development key: if .env (git-ignored) has GEMINI_API_KEY=..., it is baked into
+// dist/lib.js as a fallback for pages whose data-api-key is missing or a
+// placeholder. dist/ is git-ignored for this reason. Never ship a dev build.
 
 'use strict';
 
@@ -16,6 +21,19 @@ var FILES = ['init.js', 'extract.js', 'tree.js', 'gemini.js', 'search.js', 'prev
 
 var SRC = path.join(__dirname, 'src');
 var OUT = path.join(__dirname, 'dist', 'lib.js');
+var ENV = path.join(__dirname, '.env');
+var RELEASE = process.argv.includes('--release');
+
+// GEMINI_API_KEY from .env, or '' (no file, no such line, or a release build).
+function readDevKey() {
+  if (RELEASE) return '';
+  try {
+    var match = fs.readFileSync(ENV, 'utf8').match(/^\s*GEMINI_API_KEY\s*=\s*["']?([^"'\s#]+)/m);
+    return match ? match[1] : '';
+  } catch (err) {
+    return '';
+  }
+}
 
 var BANNER = [
   '/*',
@@ -39,10 +57,17 @@ function build() {
     var code = fs.readFileSync(path.join(SRC, name), 'utf8').replace(/\s+$/, '');
     return indent('// ---- src/' + name + ' ----\n\n' + code);
   });
-  var output = BANNER + '\n(function () {\n  \'use strict\';\n\n' + parts.join('\n\n') + '\n})();\n';
+  var devKey = readDevKey();
+  // Defined before src/init.js, which reads it.
+  var devKeyLine = indent('// Development API key from .env (empty in release builds).\n' +
+    'var DEV_API_KEY = ' + JSON.stringify(devKey) + ';');
+  var output = BANNER + '\n(function () {\n  \'use strict\';\n\n' + devKeyLine + '\n\n' +
+    parts.join('\n\n') + '\n})();\n';
   fs.mkdirSync(path.dirname(OUT), { recursive: true });
   fs.writeFileSync(OUT, output);
-  console.log('Built ' + path.relative(__dirname, OUT) + ' (' + output.length + ' bytes) at ' +
+  // Only the last 4 characters, so the key never ends up in a terminal log.
+  var keyNote = RELEASE ? 'release, no dev key' : devKey ? 'dev key …' + devKey.slice(-4) : 'no dev key';
+  console.log('Built ' + path.relative(__dirname, OUT) + ' (' + output.length + ' bytes, ' + keyNote + ') at ' +
     new Date().toLocaleTimeString());
 }
 
@@ -56,11 +81,14 @@ if (process.argv.includes('--watch')) {
   fs.watch(__filename, function () {
     console.warn('build.js changed: stop this watcher (Ctrl+C) and start it again to pick up the change.');
   });
-  fs.watch(SRC, function () {
+  function rebuildSoon() {
     // Editors often write a file in several steps; wait for them to finish.
     clearTimeout(timer);
     timer = setTimeout(function () {
       try { build(); } catch (err) { console.error('Build failed:', err.message); }
     }, 100);
-  });
+  }
+  fs.watch(SRC, rebuildSoon);
+  // Pick up a key added to (or changed in) .env. Polling also works before the file exists.
+  fs.watchFile(ENV, { interval: 1000 }, rebuildSoon);
 }

@@ -6,6 +6,8 @@ if (!startMarker) {
 } else {
   if (!config.apiKey) {
     console.warn(LOG_PREFIX, 'No data-api-key on the start tag. Queries will fail until one is set.');
+  } else if (config.apiKey === DEV_API_KEY) {
+    console.info(LOG_PREFIX, 'Using the development API key from .env (development build, not for release).');
   }
   // Small debugging surface. The API key is deliberately not exposed here.
   window.PageLens = {

@@ -15,19 +15,30 @@ src/                    the library source, one file per step
   widget.js               5. chat widget (Shadow DOM) + debug Tree view
   main.js                 public debug API + startup
 build.js                joins src/ into dist/lib.js (no dependencies)
-dist/lib.js             the built file that pages include (generated; don't edit)
+dist/lib.js             the built file that pages include (generated, git-ignored; don't edit)
 demo/index.html         sample e-commerce homepage
 examples/               open-source React apps used for testing
 ```
 
 ## Building
 
-Pages load `dist/lib.js`, so rebuild after editing anything in `src/`:
+Pages load `dist/lib.js`, which is generated and not committed. Build it after cloning, and after editing anything in `src/`:
 
 ```sh
-node build.js           # build once
-node build.js --watch   # rebuild on every save (leave it running while you work)
+node build.js             # build once
+node build.js --watch     # rebuild on every save (leave it running while you work)
+node build.js --release   # build without the development API key (for anything you share or deploy)
 ```
+
+### Development API key
+
+For local development, put your Gemini key in `.env` at the project root (git-ignored):
+
+```
+GEMINI_API_KEY=your-key-here
+```
+
+`build.js` bakes it into `dist/lib.js` as a fallback, so pages work without editing `data-api-key`. A real `data-api-key` on the start tag always wins; the dev key is used only when it's missing or a `YOUR_...` placeholder, and the console says so. The build output shows only the key's last 4 characters. Never deploy a dev build: use `--release`.
 
 ## Running the demo
 
