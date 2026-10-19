@@ -38,7 +38,8 @@ function logTreeStep(number, t, ms) {
 function logSearchSteps(first, j) {
   var n = first;
 
-  traceStep(n++ + '. Query words: ' + JSON.stringify(j.queryWords) + ' (searching ' + j.docs + ' nodes)', function () {
+  traceStep(n++ + '. Query words: ' + JSON.stringify(j.queryWords) + ' (searching ' + j.docs + ' nodes' +
+    (j.within ? ' inside ' + j.within : '') + ')', function () {
     console.log('From ' + JSON.stringify(j.query) + ': lowercased, split into words, stopwords removed, crude stemming.');
     console.log('Each product card counts as one searchable node, with its contents.');
   });
@@ -95,7 +96,7 @@ function logSearchSteps(first, j) {
 
 // Just the search part, as its own group (e.g. a search() call from the console).
 function logSearchJourney(j, results) {
-  console.group(LOG_PREFIX + ' search(' + JSON.stringify(j.query) + ') · ' + j.ms + ' ms');
+  console.group(LOG_PREFIX + ' search(' + JSON.stringify(j.query) + (j.within ? ', within ' + j.within : '') + ') · ' + j.ms + ' ms');
   var n = logSearchSteps(1, j);
   if (results) logReturnedStep(n, results);
   console.groupEnd();

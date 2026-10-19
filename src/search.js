@@ -205,13 +205,23 @@ function denseStatus() {
 
 // ---- 3. Fusion ----
 
-// Searches tree t. Returns a Promise of
+// True if node is `ancestor` or somewhere inside it.
+function isInside(node, ancestor) {
+  for (var n = node; n; n = n.parent) if (n === ancestor) return true;
+  return false;
+}
+
+// Searches tree t, or only the subtree under `within` (a node, optional).
+// Returns a Promise of
 //   { retrieval: 'hybrid' | 'keyword-only', hits: [{ node, via, ranks, scores, rrf }], journey }
 // where via says which rankings found it ("keyword", "meaning", or both), and
 // journey records every step for the developer trace (trace.js).
-function hybridSearch(t, query, limit) {
+// Scoping only filters which nodes are ranked: cached embeddings are reused, and
+// "rare word" weighting is computed among those nodes.
+function hybridSearch(t, query, limit, within) {
   var started = performance.now();
   var docs = searchDocs(t);
+  if (within) docs = docs.filter(function (doc) { return isInside(doc.node, within); });
   var keyword = bm25Rank(docs, query).slice(0, CANDIDATES);
   return denseRank(docs, query).then(function (dense) {
     var fused = new Map();
@@ -234,6 +244,7 @@ function hybridSearch(t, query, limit) {
       hits: ranked.slice(0, limit),
       journey: {
         query: query, queryWords: Array.from(new Set(words(query))), docs: docs.length,
+        within: within ? within.id + ' ' + nodeTag(within) + ' "' + clean(nodeLabel(within), 40) + '"' : '',
         keyword: keyword, dense: dense.info, fused: ranked, limit: limit,
         ms: Math.round(performance.now() - started)
       }
@@ -242,10 +253,12 @@ function hybridSearch(t, query, limit) {
 }
 
 // Prints the full search journey for a query, whether or not data-debug is on.
-// Run: await PageLens.debugSearch('television')
-function debugSearch(query) {
+// Run: await PageLens.debugSearch('television'), or scoped: debugSearch('jacket', 'n4')
+function debugSearch(query, withinId) {
   var t = tree || buildTree();
-  return hybridSearch(t, query, MAX_SEARCH).then(function (out) {
+  var within = withinId ? t.byId.get(String(withinId)) : null;
+  if (withinId && !within) return Promise.resolve(console.warn(LOG_PREFIX, 'Unknown id ' + withinId));
+  return hybridSearch(t, query, MAX_SEARCH, within).then(function (out) {
     logSearchJourney(out.journey);
     return out;
   });

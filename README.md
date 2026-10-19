@@ -85,4 +85,6 @@ The explorer's `search(text)` tool ranks nodes two ways and merges the rankings 
 - **Keywords (BM25F)**, local and free: exact words, rare words weighted higher.
 - **Meaning (embeddings)**: `gemini-embedding-001`, so "television" finds "TV". Page texts are embedded once per page and cached; later queries only embed the query.
 
-Without a usable key (none, a `YOUR_...` placeholder, or one the API rejects), search uses keywords only. In the console, `await PageLens.debugSearch('jacket')` shows how each ranking placed the results.
+Search can be limited to one subtree with `within`, e.g. `search('snowboard jacket', 'n4')` ranks only the nodes inside `n4` (say, a product list), so nav links and other sections can't crowd the results. Empty results come with a hint on what to try next.
+
+Without a usable key (none, a `YOUR_...` placeholder, or one the API rejects), search uses keywords only. In the console, `await PageLens.debugSearch('jacket')` (or `debugSearch('jacket', 'n4')`) shows how each ranking placed the results.

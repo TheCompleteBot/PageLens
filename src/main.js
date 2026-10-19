@@ -20,8 +20,9 @@ if (!startMarker) {
       root: function () { return (tree || buildTree()) && rootView(); },
       expand: function (id) { return (tree || buildTree()) && tools.expand(id); },
       read: function (id) { return (tree || buildTree()) && tools.read(id); },
-      // Returns a Promise: await PageLens.tools.search('jacket').
-      search: function (text) { if (!tree) buildTree(); return tools.search(text); }
+      // Returns a Promise: await PageLens.tools.search('jacket'), or only inside
+      // one subtree: await PageLens.tools.search('jacket', 'n4').
+      search: function (text, within) { if (!tree) buildTree(); return tools.search(text, within); }
     },
     // How keyword and meaning rankings placed each result, as a table.
     debugSearch: debugSearch,

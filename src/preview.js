@@ -16,7 +16,7 @@ function answerQuery(query) {
   var t = tree;
   var start = rootView();
   var journey = null;
-  return tools.search(query, { quiet: true, onJourney: function (j) { journey = j; } }).then(function (hits) {
+  return tools.search(query, null, { quiet: true, onJourney: function (j) { journey = j; } }).then(function (hits) {
     if (config.debug) {
       logQueryJourney({
         query: query, tree: t, treeMs: treeMs, journey: journey, results: hits.results,

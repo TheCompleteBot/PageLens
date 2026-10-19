@@ -326,12 +326,20 @@ var tools = {
   // Hybrid search (see search.js). Async, because the meaning half calls the
   // embedding API. Each hit is reported once: a match inside a product card is
   // returned as the card's record.
+  // within (optional): an id; only nodes inside that subtree are searched,
+  //   e.g. search('snowboard jacket', 'n4') to look among one list of products.
   // options (optional): { quiet: true } skips the developer trace;
-  // onJourney(journey) receives the step-by-step record (used by the query trace).
-  search: function (text, options) {
+  //   onJourney(journey) receives the step-by-step record (used by the query trace).
+  search: function (text, within, options) {
     options = options || {};
     var t = tree; // The tree this search ran on, even if a new query rebuilds it meanwhile.
-    return hybridSearch(t, text, MAX_SEARCH).then(function (out) {
+    var scope = null;
+    if (within) {
+      var found = lookup(within);
+      if (found.error) return Promise.resolve(found);
+      scope = found.node;
+    }
+    return hybridSearch(t, text, MAX_SEARCH, scope).then(function (out) {
       out.hits.forEach(function (hit) { t.seen.add(hit.node.id); });
       var result = {
         retrieval: out.retrieval,
@@ -342,6 +350,12 @@ var tools = {
           return s;
         })
       };
+      if (scope) result.within = scope.id;
+      if (!result.results.length) {
+        result.hint = 'No matches' + (scope ? ' inside ' + scope.id : '') +
+          '. Try other words (synonyms, the page\'s likely wording), ' +
+          (scope ? 'search the whole page, ' : '') + 'or expand from the top level.';
+      }
       if (options.onJourney) options.onJourney(out.journey);
       if (config.debug && !options.quiet) logSearchJourney(out.journey, result.results);
       return result;
