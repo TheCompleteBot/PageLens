@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+
+# Next.js
+.next/
+out/
+next-env.d.ts
+
+# Environment & Secrets
+.env
+.env.*
+!.env.example
+
+# Build output
+dist/
+build/
+
+# Cache
+.cache/
+*.cache
+.turbo/
+.eslintcache
+
+# Logs
+logs/
+*.log*
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/

@@ -1,0 +1,83 @@
+name: Automated Lint and Formatting Fixes
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+    branches:
+      - "**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "lts/*"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify Biome
+        run: npx biome check .
+
+  lint-format-and-pr:
+    if: github.event_name == 'push' && github.ref_name == 'main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "lts/*"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Apply Biome fixes
+        run: npx biome check --write .
+
+      - name: Verify Biome
+        run: npx biome check .
+
+      - name: Create pull request with auto-fixes
+        uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore: apply automated lint and formatting fixes"
+          title: "chore: automated lint and formatting fixes"
+          body: |
+            This pull request was created automatically after a push to a protected branch.
+
+            It includes the following automated updates:
+            - Biome auto-fixes via `npx biome check --write .`
+            - Re-validation with `npx biome check .`
+          branch: "chore/auto-lint-format-fixes"
+          delete-branch: true
+          labels: |
+            automated
+            automation

@@ -1,6 +1,100 @@
 # PageLens (MVP)
 
-A plain-JS library that adds a chat widget to a page. When the user types what they're looking for, it scrolls to and highlights the most relevant element in the marked region, or says the answer isn't on this page.
+A plain-JS library that adds a chat assistant to a web page. A visitor types a question ("is delivery free?", "where can I book a table?"); PageLens finds the answer in the page's own content, replies in the chat, and scrolls to and highlights the parts of the page the reply is based on. If the page doesn't have it, it says so instead of guessing.
+
+## Using PageLens on your site
+
+### 1. Get the library and a key
+
+```sh
+git clone https://github.com/TheCompleteBot/PageLens.git
+cd PageLens
+node build.js --release        # writes dist/lib.js (no API key baked in)
+```
+
+Copy `dist/lib.js` into your site's static files (e.g. `public/pagelens/lib.js`). You also need a Gemini API key from [Google AI Studio](https://aistudio.google.com/apikey).
+
+**The key is visible to every visitor** (it sits in the page's HTML), so use a key with a low spending limit, or a free-tier key, and never one with access to anything else. This is fine for a prototype, not for production.
+
+### 2. Mark the part of the page the assistant may use
+
+Put the start tag where the assistant's region begins and the end tag where it ends. PageLens only reads, and only points to, what is between them; anything outside (e.g. a header or footer) is ignored. These two tags are the only change to your page.
+
+```html
+<body>
+  <header>...ignored by the assistant...</header>
+
+  <script src="/pagelens/lib.js"
+          data-start
+          data-api-key="YOUR_GEMINI_API_KEY"
+          data-provider="gemini"></script>
+
+  <main>...products, prices, FAQs, tables: what the assistant may read and point to...</main>
+
+  <script data-pagelens-end></script>
+
+  <footer>...ignored by the assistant...</footer>
+</body>
+```
+
+The start tag must be a plain `<script src>`: no `async`, `defer` or `type="module"` (PageLens finds its own tag while it loads).
+
+Attributes on the start tag:
+
+| Attribute | Default | Meaning |
+|---|---|---|
+| `data-start` | required | Marks this tag as the start of the region. |
+| `data-api-key` | required | Your Gemini API key. |
+| `data-provider` | `gemini` | The only provider so far. |
+| `data-model` | `gemini-3.5-flash-lite` | Model for both LLM steps. On rate limits (429) or overload (5xx) requests are retried with backoff, then fall back to `gemini-3.5-flash`. |
+| `data-navigator` | `llm` | `llm` (the explorer with tools) or `search` (the top search hit, no LLM; a baseline). |
+| `data-debug` | off | Developer tools: a Tree view in the chat, and a step-by-step trace of every question in the browser console. |
+
+### 3. Framework notes
+
+- **Plain HTML:** put the tags in the page, as above.
+- **Vite, Create React App and other single-page apps:** put them in `index.html` around the app's root element, e.g. around `<div id="root"></div>`. The content is read from the live page when a question is asked, so whatever the app renders counts.
+- **Next.js (app router):** put them in `app/layout.tsx`, preferably **inside `<main>` around `{children}`**:
+
+  ```tsx
+  <main>
+    {/* eslint-disable-next-line @next/next/no-sync-scripts */}
+    <script src="/pagelens/lib.js" data-start="" data-api-key="YOUR_GEMINI_API_KEY" data-provider="gemini" />
+    {children}
+    <script data-pagelens-end="" />
+  </main>
+  ```
+
+  Next.js's lint rule `no-sync-scripts` rejects the start tag, hence the disable comment (or build with `next build --no-lint`). Placing the tags directly in `<body>` next to client components made React render them twice on one test site, which breaks the region; inside `<main>` it works.
+
+Serve the page over HTTP (`npx serve`, your dev server, or your host), not from `file://`.
+
+### 4. What visitors get
+
+- A chat button in the bottom-right corner, drawn in its own Shadow DOM so your CSS can't affect it (and it can't affect your page).
+- Replies of 1 to 3 sentences, built only from the page's text. Every fact is cited; numbers must be quoted from the page or computed from quoted numbers, or the reply is not shown.
+- Numbered highlights (up to 5) on the elements the reply is based on; the page scrolls to the first, and the chat has a button per highlight.
+- "I couldn't find that on this page" when it isn't there, or "…might be under X" when it could be behind a link, a "See all" page, or a chart whose values aren't readable as text.
+
+### 5. What is sent to Gemini
+
+The visitor's question and the visible text of your marked region (as a compact page tree), with obvious personal data (emails, long phone numbers) replaced by `[email]` / `[phone]` before anything leaves the browser. Page text is treated as untrusted (prompt-injection attempts in it are ignored). Nothing is sent from outside the region.
+
+### 6. Current limitations
+
+- **Content that fades in on scroll is invisible until the visitor scrolls past it.** Many landing pages animate sections in (opacity 0 until they enter the screen); PageLens skips invisible elements, so questions about those sections fail until then. On two of our test sites this hid most of the page.
+- **Infinite scroll and lazy-loaded content** (not yet loaded) can't be read. Out of scope for now.
+- **Guide only:** it highlights and scrolls; it never clicks, types, fills forms or navigates. It only knows the current page.
+- **Text only:** no images, and no values drawn in charts (only a chart's labels).
+- **English only.** Gemini is the only provider. A question takes about 5–15 s (2–4 LLM calls); free-tier keys are rate-limited.
+- Long paragraphs are cut at about 200 characters in the page tree, so facts at the end of long text can be missed.
+- The API key is public (see step 1).
+
+Measured accuracy (see Testing below and `tests/reports/`): 94% of replies correct on our 60-question test set; 90% on three open-source sites never used for development (94% if replies that were right but worded differently from the reference are counted), measured after scrolling the page; 0 of 12 before scrolling, because of the first limitation.
+
+## Developing PageLens
+
+The rest of this file is for working on PageLens itself.
 
 ## Layout
 
@@ -22,7 +116,7 @@ build.js                joins src/ into dist/lib.js (no dependencies)
 dist/lib.js             the built file that pages include (generated, git-ignored; don't edit)
 demo/index.html         sample e-commerce homepage
 examples/               open-source React apps used for testing
-tests/                  explorer test set (cases.json) and runner (run.mjs)
+tests/                  question sets (cases.json, testset.json, freshset.json), runner (run.mjs), reports/
 ```
 
 ## Building
@@ -67,23 +161,11 @@ cd examples/storefront && npx vite --port 5173      # shop, data from FakeStoreA
 cd examples/shadcn-admin && npx vite --port 5174    # admin dashboard
 ```
 
+The three fresh-site apps (restaurant, app landing page, blog) and their commands, install steps and integration notes are in `examples/README.md`.
+
 On a fresh clone, install dependencies first: `npm install` in `storefront`, `npx pnpm install` in `shadcn-admin`.
 
-## Adding it to a page
-
-```html
-<script src="lib.js" data-start data-api-key="KEY" data-provider="gemini"></script>
-  ... the only content the assistant may read and point to ...
-<script data-pagelens-end></script>
-```
-
-Optional attributes on the start tag:
-
-| Attribute | Default | Meaning |
-|---|---|---|
-| `data-model` | `gemini-3.5-flash-lite` | Model the explorer uses. Rate-limit (429) and overload (5xx) errors are retried with exponential backoff and jitter; if the model stays unavailable, it falls back to `gemini-3.5-flash`. |
-| `data-navigator` | `llm` | How targets are chosen: `llm` (the explorer with tools) or `search` (top search hit, no LLM; a baseline for comparison). |
-| `data-debug` | off | Developer tools, below. |
+## Debug tools
 
 Add `data-debug` to the start tag for developer tools:
 
@@ -136,10 +218,11 @@ Without a usable key (none, a `YOUR_...` placeholder, or one the API rejects), s
 
 ## Testing the explorer
 
-Two sets of queries, for all three sites:
+Three sets of questions:
 
-- `tests/cases.json`: the **dev set**. Tune prompts and code against it.
-- `tests/testset.json`: the **test set**. 60 held-out questions with their expected action, the page nodes that hold the answer (`evidence`), and a reference answer for the answer step later. Only run it to measure, never to tune: otherwise its scores stop meaning anything. Its header documents the format and the metrics.
+- `tests/cases.json`: the **dev set** (demo, dashboard). Tune prompts and code against it.
+- `tests/testset.json`: the **test set**. 60 held-out questions on the demo, dashboard and storefront, with their expected action, the page nodes that hold the answer (`evidence`), and a reference answer. Only run it to measure, never to tune: otherwise its scores stop meaning anything. Its header documents the format and the metrics.
+- `tests/freshset.json`: the **fresh-site set** (`--set fresh`). 51 questions on three sites never used for development (restaurant, app landing page, blog), including 4 asked without scrolling to measure the scroll-animation limitation. Sites marked `"scroll": true` are scrolled through once after loading.
 
 Evidence is matched by text (node IDs change), against the page tree the explorer sees. `--check` verifies, without any LLM call, that every evidence item still matches a node on the live page; run it after changing a page, the extractor, or the set.
 

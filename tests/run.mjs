@@ -7,6 +7,7 @@
 // Two sets:
 //   tests/cases.json    dev set: tune prompts and code against this one
 //   tests/testset.json  test set: held out, only for measuring (--set test)
+//   tests/freshset.json fresh sites never used for development (--set fresh)
 //
 //   node tests/run.mjs                    dev set, every case, 3 runs each
 //   node tests/run.mjs --set test         the test set
@@ -127,11 +128,18 @@ async function openChrome(key) {
     rekeyed: () => rekeyed,
     send,
     on: (fn) => listeners.push(fn),
-    async load(url) {
+    async load(site) {
       const loaded = new Promise((r) => listeners.push((msg) => { if (msg.method === 'Page.loadEventFired') r(); }));
-      await send('Page.navigate', { url });
+      await send('Page.navigate', { url: site.url });
       await loaded;
       await sleep(RENDER_WAIT_MS);
+      if (site.scroll) {
+        await send('Runtime.evaluate', { awaitPromise: true, expression: `(async () => {
+          var h = document.documentElement.scrollHeight;
+          for (var y = 0; y < h; y += 300) { window.scrollTo(0, y); await new Promise(function (r) { setTimeout(r, 250); }); }
+          window.scrollTo(0, 0); await new Promise(function (r) { setTimeout(r, 1500); });
+        })()` });
+      }
     },
     async evaluate(expression) {
       const res = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
@@ -205,8 +213,11 @@ const EXPLORE = (q) => `(${WITH_ANSWER} ? PageLens.answer(${JSON.stringify(q)}).
 // { id, site, type, question, outcomes: [{ action, match?, evidence: [{ match, context?, tag?, exact? }] }] }
 
 function loadSet(name) {
-  const file = name === 'test' ? 'testset.json' : 'cases.json';
+  const file = { test: 'testset.json', fresh: 'freshset.json' }[name] || 'cases.json';
   const data = JSON.parse(readFileSync(join(HERE, file), 'utf8'));
+  // A site is a URL, or { url, scroll }: scroll = scroll through the page once after
+  // loading, for pages whose content fades in on scroll (invisible until then).
+  Object.keys(data.sites).forEach((k) => { if (typeof data.sites[k] === 'string') data.sites[k] = { url: data.sites[k] }; });
   const cases = data.cases.map((c, i) => c.question
     ? { id: c.id, site: c.site, type: c.type, question: c.question, note: c.note,
         outcomes: [c.expected].concat(c.alternatives || []) }
@@ -571,7 +582,7 @@ function saveRun(run) {
 // --report: rebuild the report of a saved run, re-scored with the current scoring.
 if (REPORT_FROM) {
   const data = JSON.parse(readFileSync(REPORT_FROM, 'utf8'));
-  const setName = /testset/.test(data.set || '') ? 'test' : 'dev';
+  const setName = /testset/.test(data.set || '') ? 'test' : /freshset/.test(data.set || '') ? 'fresh' : 'dev';
   const fresh = loadSet(setName).cases;
   // Old files stored the dev-set format; match cases by question to today's definitions.
   const selected = data.cases.map((c) => fresh.find((f) => f.question === (c.question || c.q)))
@@ -641,7 +652,7 @@ let results;
 let runSet = SET, runSetFile = setFile, runCount = RUNS, retryNote = '';
 if (RETRY_FROM) {
   const data = JSON.parse(readFileSync(RETRY_FROM, 'utf8'));
-  runSet = /testset/.test(data.set || '') ? 'test' : 'dev';
+  runSet = /testset/.test(data.set || '') ? 'test' : /freshset/.test(data.set || '') ? 'fresh' : 'dev';
   const fresh = loadSet(runSet);
   runSetFile = fresh.file;
   runCount = data.runs;
@@ -676,7 +687,7 @@ async function worker(w) {
         site = job.c.site;
         await chrome.load(sites[site]);
         if (!(await chrome.evaluate('!!window.PageLens'))) {
-          throw new Error('PageLens did not load on ' + sites[site] + '. Is the site running, and built with node build.js?');
+          throw new Error('PageLens did not load on ' + sites[site].url + '. Is the site running, and built with node build.js?');
         }
       }
       if (!first) await sleep(GAP_S * (0.8 + Math.random() * 0.4) * 1000); // jitter
