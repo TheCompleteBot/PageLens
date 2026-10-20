@@ -5,6 +5,8 @@
 //   node build.js             build once
 //   node build.js --watch     rebuild whenever a file in src/ (or .env) changes
 //   node build.js --release   build without the development API key
+//   node build.js --key GEMINI_API_KEY_3   use another .env variable as the dev key
+//                             (works with --watch too)
 //
 // Development key: if .env (git-ignored) has GEMINI_API_KEY=..., it is baked into
 // dist/lib.js as a fallback for pages whose data-api-key is missing or a
@@ -17,14 +19,20 @@ var path = require('path');
 
 // Order matters: init.js must come first (it captures document.currentScript),
 // and main.js last (it starts everything once all functions are defined).
-var FILES = ['init.js', 'extract.js', 'tree.js', 'gemini.js', 'search.js', 'trace.js', 'preview.js', 'widget.js', 'main.js'];
+var FILES = ['init.js', 'extract.js', 'tree.js', 'gemini.js', 'search.js', 'trace.js', 'explorer.js', 'query.js', 'widget.js', 'main.js'];
 
 var SRC = path.join(__dirname, 'src');
 var OUT = path.join(__dirname, 'dist', 'lib.js');
 var ENV = path.join(__dirname, '.env');
 var RELEASE = process.argv.includes('--release');
+var keyFlag = process.argv.indexOf('--key');
+var KEY_NAME = keyFlag === -1 ? 'GEMINI_API_KEY' : process.argv[keyFlag + 1];
+if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(KEY_NAME || '')) {
+  console.error('--key needs a .env variable name, e.g. --key GEMINI_API_KEY_3');
+  process.exit(1);
+}
 
-// GEMINI_API_KEY from .env, or '' (no file, no such line, or a release build).
+// KEY_NAME (default GEMINI_API_KEY) from .env, or '' (no file, no such line, or a release build).
 // When .env exists but has no usable line, warns with the variable names it does
 // contain (names only, never values), so a typo is easy to spot.
 var warnedAboutEnv = '';
@@ -32,10 +40,10 @@ function readDevKey() {
   if (RELEASE) return '';
   var env;
   try { env = fs.readFileSync(ENV, 'utf8'); } catch (err) { return ''; }
-  var match = env.match(/^\s*GEMINI_API_KEY\s*=\s*["']?([^"'\s#]+)/m);
+  var match = env.match(new RegExp('^\\s*' + KEY_NAME + '\\s*=\\s*["\']?([^"\'\\s#]+)', 'm'));
   if (match) return match[1];
   var names = (env.match(/^\s*[A-Za-z_][A-Za-z0-9_]*/gm) || []).map(function (n) { return n.trim(); });
-  var hint = '.env has no GEMINI_API_KEY=... line' + (names.length ? ' (found: ' + names.join(', ') + ')' : '') + '.';
+  var hint = '.env has no ' + KEY_NAME + '=... line' + (names.length ? ' (found: ' + names.join(', ') + ')' : '') + '.';
   if (hint !== warnedAboutEnv) console.warn(hint);
   warnedAboutEnv = hint;
   return '';
@@ -72,7 +80,7 @@ function build() {
   fs.mkdirSync(path.dirname(OUT), { recursive: true });
   fs.writeFileSync(OUT, output);
   // Only the last 4 characters, so the key never ends up in a terminal log.
-  var keyNote = RELEASE ? 'release, no dev key' : devKey ? 'dev key …' + devKey.slice(-4) : 'no dev key';
+  var keyNote = RELEASE ? 'release, no dev key' : devKey ? 'dev key ' + KEY_NAME + ' …' + devKey.slice(-4) : 'no dev key';
   console.log('Built ' + path.relative(__dirname, OUT) + ' (' + output.length + ' bytes, ' + keyNote + ') at ' +
     new Date().toLocaleTimeString());
 }

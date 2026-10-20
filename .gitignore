@@ -11,3 +11,6 @@ dist/
 
 # OS / editor files
 .DS_Store
+
+# Explorer test results (tests/run.mjs)
+tests/results/

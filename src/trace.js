@@ -1,6 +1,6 @@
 // Developer trace. With data-debug on the start tag, every query prints its
 // whole journey to the console as one group: the tree, keyword ranking, meaning
-// ranking, rank fusion, and what the explorer receives. Each step is an
+// ranking, rank fusion, then each explorer turn and the result. Each step is an
 // expanded sub-group (click its title to collapse it) with a table.
 
 function round(x, digits) {
@@ -109,15 +109,50 @@ function logReturnedStep(number, results) {
   });
 }
 
-// A whole chat query: tree, search steps, and what the explorer would start with.
-// `parts` = { query, tree, treeMs, journey, results, rootView, totalMs }.
-function logQueryJourney(parts) {
-  console.group(LOG_PREFIX + ' Query: ' + JSON.stringify(parts.query) + ' · ' + parts.totalMs + ' ms');
-  logTreeStep(1, parts.tree, parts.treeMs);
-  var n = logSearchSteps(2, parts.journey);
-  logReturnedStep(n++, parts.results);
-  traceStep(n + '. Explorer would start with: the top level + these search results (preview mode, no LLM yet)', function () {
-    console.log({ topLevel: parts.rootView.children, search: parts.results });
+// A whole chat query, from the explorer's state: tree, the automatic first
+// search, every model turn with its tool calls, and the result.
+function logQueryJourney(state) {
+  var r = state.result;
+  console.group(LOG_PREFIX + ' Query: ' + JSON.stringify(state.query) + ' → ' + r.action +
+    (r.targets.length ? ' ' + r.targets.join(' ') : '') + ' · ' + state.ms + ' ms');
+  logTreeStep(1, state.tree, state.treeMs);
+  var n = logSearchSteps(2, state.start.journey);
+  logReturnedStep(n++, state.start.search.results);
+
+  var journeys = state.searchJourneys.slice();
+  state.steps.forEach(function (step) {
+    var tokens = step.tokens ? ' · ' + step.tokens.totalTokenCount + ' tokens' : '';
+    traceStep(n++ + '. Explorer turn ' + step.n + ' · ' + (step.model || '?') + ' · ' + step.ms + ' ms' + tokens +
+      (step.finishOnly ? ' · finish only' : ''), function () {
+      step.calls.forEach(function (call) {
+        console.log(describeCall(call));
+        if (call.result && !call.error) console.log(call.result);
+        // A search the model made: its keyword / meaning / fusion steps, collapsed.
+        if (call.name === 'search' && call.result && call.result.results && journeys.length) {
+          var j = journeys.shift();
+          console.groupCollapsed('how search ranked ' + JSON.stringify(j.query));
+          logSearchSteps(1, j);
+          console.groupEnd();
+        }
+      });
+    });
   });
+
+  traceStep(n + '. Result: ' + r.action + (r.match === 'maybe' ? ' (maybe)' : '') + (r.targets.length ? ' ' + r.targets.join(' ') : ''), function () {
+    r.targets.forEach(function (id) {
+      var node = state.tree.byId.get(id);
+      console.log(id + ' ' + nodeTag(node) + ': ' + nodeLabel(node) + '   (in: ' + (pathOf(node) || 'top level') + ')');
+    });
+    if (r.note) console.log('Note: ' + r.note);
+    console.log(state.toolCalls + ' tool calls (' + state.searches + ' searches incl. the first), ' +
+      state.steps.length + ' model turns, ' + state.rejections + ' rejected finish.');
+  });
+  if (state.handoff && r.action !== 'abstain') {
+    traceStep(n + 1 + '. Hand-off to the answer step: ' + state.handoff.sources.length + ' source(s), ' +
+      state.handoff.context.length + ' other read node(s)', function () {
+      console.log(handoffLines(state.handoff).join('\n'));
+      console.log(state.handoff);
+    });
+  }
   console.groupEnd();
 }

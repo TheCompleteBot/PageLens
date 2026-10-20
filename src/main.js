@@ -24,6 +24,11 @@ if (!startMarker) {
       // one subtree: await PageLens.tools.search('jacket', 'n4').
       search: function (text, within) { if (!tree) buildTree(); return tools.search(text, within); }
     },
+    // Runs the explorer on a query without the chat, e.g.
+    // (await PageLens.explore('is delivery free?')).result
+    explore: function (query) {
+      return explore(query).then(function (state) { if (config.debug) logQueryJourney(state); return state; });
+    },
     // How keyword and meaning rankings placed each result, as a table.
     debugSearch: debugSearch,
     // DOM node for a tree ID from the latest tree, e.g. PageLens.nodeFor('n12').

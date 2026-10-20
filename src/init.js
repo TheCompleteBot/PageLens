@@ -17,6 +17,10 @@ var config = {
   // real one, development builds fall back to DEV_API_KEY (set by build.js from .env).
   apiKey: ((startMarker && startMarker.getAttribute('data-api-key')) || '').replace(/^YOUR_.*$/, '') || DEV_API_KEY,
   provider: ((startMarker && startMarker.getAttribute('data-provider')) || 'gemini').toLowerCase(),
+  // The model the explorer uses (see gemini.js), and how it picks targets:
+  // 'llm' (explore with tools) or 'search' (top search hit, no LLM; a baseline).
+  model: (startMarker && startMarker.getAttribute('data-model')) || 'gemini-3.5-flash-lite',
+  navigator: ((startMarker && startMarker.getAttribute('data-navigator')) || 'llm').toLowerCase(),
   // data-debug on the start tag adds a Tree view to the widget (developer tool).
   debug: !!startMarker && startMarker.hasAttribute('data-debug')
 };

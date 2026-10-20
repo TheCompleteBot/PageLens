@@ -9,16 +9,18 @@ src/                    the library source, one file per step
   init.js                 1. config + finding the AI region
   extract.js              2. describing visible elements and content
   tree.js                 2b. page tree + read-only explorer tools
-  gemini.js               Gemini REST client (embeddings for now)
+  gemini.js               Gemini REST client: embeddings + generation with function calling
   search.js               hybrid search: BM25F + Gemini embeddings, merged with RRF
   trace.js                developer trace: logs each query's journey to the console
-  preview.js              query handler (preview mode until the LLM step)
+  explorer.js             3. explorer: picks the node(s) for a query (LLM with tools, or search only)
+  query.js                query handler: explorer result -> chat reply (preview until the answer step)
   widget.js               5. chat widget (Shadow DOM) + debug Tree view
   main.js                 public debug API + startup
 build.js                joins src/ into dist/lib.js (no dependencies)
 dist/lib.js             the built file that pages include (generated, git-ignored; don't edit)
 demo/index.html         sample e-commerce homepage
 examples/               open-source React apps used for testing
+tests/                  explorer test set (cases.json) and runner (run.mjs)
 ```
 
 ## Building
@@ -73,10 +75,31 @@ On a fresh clone, install dependencies first: `npm install` in `storefront`, `np
 <script data-pagelens-end></script>
 ```
 
+Optional attributes on the start tag:
+
+| Attribute | Default | Meaning |
+|---|---|---|
+| `data-model` | `gemini-3.5-flash-lite` | Model the explorer uses. Rate-limit (429) and overload (5xx) errors are retried with exponential backoff and jitter; if the model stays unavailable, it falls back to `gemini-3.5-flash`. |
+| `data-navigator` | `llm` | How targets are chosen: `llm` (the explorer with tools) or `search` (top search hit, no LLM; a baseline for comparison). |
+| `data-debug` | off | Developer tools, below. |
+
 Add `data-debug` to the start tag for developer tools:
 
 - a **Tree** view in the widget, showing the page tree the explorer walks;
-- a **query trace** in the browser console. Every chat query prints one group: the tree, the query words, the keyword ranking (BM25F scores), the meaning ranking (similarities, cutoff, cache use), rank fusion (RRF), and what the explorer receives. `await PageLens.tools.search('...')` in the console prints the search part.
+- a **query trace** in the browser console. Every chat query prints one group: the tree, the automatic first search (query words, BM25F scores, similarities, RRF), every explorer turn (model, time, tokens, tool calls and their results), and the result. `await PageLens.explore('...')` runs the explorer without the chat; `await PageLens.tools.search('...')` prints just a search.
+
+## Explorer
+
+For each query the explorer starts from the page's top level plus `search(query)`, then calls tools until it calls `finish`:
+
+- `expand(id)`, `read(id)`, `search(text, within?)`: read-only; they never change the page.
+- `finish(action, targets)`: `answer` (the targets' text holds the information asked for), `highlight` (point to the targets) or `abstain` (not on this page). It returns node IDs only, no text for the user, so it can pick the wrong node but can't make up facts.
+
+Limits, enforced in code: 8 tool calls (then only `finish` is allowed), 3 searches including the first, repeated calls refused, 30 s. A `finish` whose targets the explorer was never shown is sent back once to be fixed; a second bad one becomes `abstain`.
+
+Targets nested inside another target are dropped (a product card already contains its price).
+
+The answer step (next) gets a **hand-off** built by code, like retrieved chunks in RAG: the question, the action, the targets as `sources` (cited and highlighted), and as `context` the other page text the explorer read with `read()`, minus what's inside a source, capped at 3000 characters. Every text in it is page text: no tool calls, search lists or model-written text. For now the chat reply shows this hand-off; writing the answer and highlighting on the page come next.
 
 ## Search
 
@@ -88,3 +111,28 @@ The explorer's `search(text)` tool ranks nodes two ways and merges the rankings 
 Search can be limited to one subtree with `within`, e.g. `search('snowboard jacket', 'n4')` ranks only the nodes inside `n4` (say, a product list), so nav links and other sections can't crowd the results. Empty results come with a hint on what to try next.
 
 Without a usable key (none, a `YOUR_...` placeholder, or one the API rejects), search uses keywords only. In the console, `await PageLens.debugSearch('jacket')` (or `debugSearch('jacket', 'n4')`) shows how each ranking placed the results.
+
+## Testing the explorer
+
+Two sets of queries, for all three sites:
+
+- `tests/cases.json`: the **dev set**. Tune prompts and code against it.
+- `tests/testset.json`: the **test set**. 60 held-out questions with their expected action, the page nodes that hold the answer (`evidence`), and a reference answer for the answer step later. Only run it to measure, never to tune: otherwise its scores stop meaning anything. Its header documents the format and the metrics.
+
+Evidence is matched by text (node IDs change), against the page tree the explorer sees. `--check` verifies, without any LLM call, that every evidence item still matches a node on the live page; run it after changing a page, the extractor, or the set.
+
+`tests/run.mjs` runs each case several times in headless Chrome (the model doesn't answer the same way every time) and reports per-case pass rates plus metrics, overall, per site and per question type: success, action accuracy, evidence recall, target precision, abstain precision/recall, and tool calls, tokens and seconds per query.
+
+```sh
+node build.js                       # a development build (uses the .env key)
+npx serve .                         # demo at :3000 (in another terminal)
+cd examples/shadcn-admin && npx vite --port 5174   # dashboard (another terminal)
+cd examples/storefront && npx vite --port 5173     # storefront (another terminal)
+
+node tests/run.mjs                  # dev set, 3 runs per case
+node tests/run.mjs --set test       # test set
+node tests/run.mjs --set test --check
+node tests/run.mjs --site dashboard --runs 5 --only "profit"
+```
+
+API keys: the runner uses every `GEMINI_API_KEY`, `GEMINI_API_KEY_2`, ... in `.env`, one headless Chrome per key, swapping the key into the page's Gemini requests. Rate limits are per Google Cloud project, so extra keys only help if they have their own quota. Each worker spaces its queries ~10 s apart (`--gap`). Every run saves a readable report to `tests/reports/<time>-<set>.md` (committed, so the history of scores stays in the repo) and every run's details to `tests/results/` (git-ignored). `node tests/run.mjs --report tests/results/<file>.json` rebuilds a report from saved details with the current scoring.
