@@ -13,7 +13,9 @@ src/                    the library source, one file per step
   search.js               hybrid search: BM25F + Gemini embeddings, merged with RRF
   trace.js                developer trace: logs each query's journey to the console
   explorer.js             3. explorer: picks the node(s) for a query (LLM with tools, or search only)
-  query.js                query handler: explorer result -> chat reply (preview until the answer step)
+  answer.js               4. answer step: writes the reply from the hand-off, with checked citations
+  highlight.js            5. executor: scrolls to and highlights the cited elements
+  query.js                query handler: explorer -> answer step -> highlights -> chat reply
   widget.js               5. chat widget (Shadow DOM) + debug Tree view
   main.js                 public debug API + startup
 build.js                joins src/ into dist/lib.js (no dependencies)
@@ -108,7 +110,18 @@ The answer step (next) gets a **hand-off** built by code, like retrieved chunks 
 
 Budget rules: every tool result says how many calls and searches are left; a search with the same words as an earlier one (including the automatic first search) is refused; `expand`/`read` of a node inside one already read is answered from memory for free. Card summaries (product records, small titled groups) include `details`, the text inside them, so prices and figures are visible without reading each card.
 
-For now the chat reply shows the hand-off; writing the answer and highlighting on the page come next.
+## Answer step and highlights
+
+The answer step (`src/answer.js`, same model as the explorer) gets only the hand-off and returns JSON: a short `reply` with markers like `[1]`, and `citations`, each an id from the hand-off plus the exact words quoted from it. Code checks it before anything is shown:
+
+- every citation id is in the hand-off, and its quote is found word for word in that text (case, dashes and separators ignored);
+- every number in the reply appears in a quote, or follows from quoted numbers by simple arithmetic (a sum, a difference, a ratio, the total), or is a small count.
+
+A failed check is sent back once with the reasons; a second failure gives "I found related information on this page, but couldn't confirm an exact answer", with nothing highlighted. `abstain` needs no LLM call.
+
+**What gets highlighted is exactly what the reply cites**, not the explorer's targets: each quote is narrowed to the smallest element holding it, then lifted to its record (a product card, a customer row), so a name and a price from one row are one highlight. Up to 5, numbered in reply order; the page scrolls to the first, and the chat shows a button per highlight that scrolls to it. The boxes are drawn in their own Shadow DOM layer over the page; the page itself is never changed.
+
+With `data-debug`, the chat message also shows the answer step's attempts and checks, the hand-off and the explorer's steps. `await PageLens.answer('...')` runs the whole pipeline from the console.
 
 ## Search
 

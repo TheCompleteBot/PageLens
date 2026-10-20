@@ -147,6 +147,7 @@ function logQueryJourney(state) {
     console.log(state.toolCalls + ' tool calls (' + state.searches + ' searches incl. the first), ' +
       state.steps.length + ' model turns, ' + state.rejections + ' rejected finish.');
   });
+  if (state.answer) logAnswerStep(n + 2, state.answer);
   if (state.handoff && r.action !== 'abstain') {
     traceStep(n + 1 + '. Hand-off to the answer step: ' + state.handoff.sources.length + ' source(s), ' +
       state.handoff.context.length + ' other read node(s)', function () {
@@ -155,4 +156,17 @@ function logQueryJourney(state) {
     });
   }
   console.groupEnd();
+}
+
+function logAnswerStep(number, a) {
+  traceStep(number + '. Answer step: ' + a.status + ', ' + a.attempts.length + ' LLM call(s), ' + a.highlights.length +
+    ' highlight(s) · ' + a.ms + ' ms', function () {
+    console.log('Reply: ' + a.reply);
+    a.attempts.forEach(function (at, i) {
+      console.log('Attempt ' + (i + 1) + ' (' + at.model + ', ' + at.ms + ' ms' +
+        (at.tokens ? ', ' + at.tokens.totalTokenCount + ' tokens' : '') + '):', at.output);
+      at.problems.forEach(function (p) { console.log('  ✗ ' + p); });
+    });
+    a.highlights.forEach(function (h) { console.log('Highlight ' + h.n + ': ' + h.id + ' "' + h.label + '"', h.el); });
+  });
 }

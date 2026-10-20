@@ -19,7 +19,7 @@ var path = require('path');
 
 // Order matters: init.js must come first (it captures document.currentScript),
 // and main.js last (it starts everything once all functions are defined).
-var FILES = ['init.js', 'extract.js', 'tree.js', 'gemini.js', 'search.js', 'trace.js', 'explorer.js', 'query.js', 'widget.js', 'main.js'];
+var FILES = ['init.js', 'extract.js', 'tree.js', 'gemini.js', 'search.js', 'trace.js', 'explorer.js', 'answer.js', 'highlight.js', 'query.js', 'widget.js', 'main.js'];
 
 var SRC = path.join(__dirname, 'src');
 var OUT = path.join(__dirname, 'dist', 'lib.js');

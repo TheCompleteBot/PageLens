@@ -29,6 +29,19 @@ if (!startMarker) {
     explore: function (query) {
       return explore(query).then(function (state) { if (config.debug) logQueryJourney(state); return state; });
     },
+    // Explorer + answer step + highlights, without the chat, e.g.
+    // (await PageLens.answer('is delivery free?')).reply
+    answer: function (query) {
+      clearHighlights();
+      return explore(query).then(function (state) {
+        return answerStep(state).then(function (a) {
+          state.answer = a;
+          if (config.debug) logQueryJourney(state);
+          showHighlights(a.highlights);
+          return { reply: a.reply, status: a.status, highlights: a.highlights.map(function (h) { return h.id; }), state: state };
+        });
+      });
+    },
     // How keyword and meaning rankings placed each result, as a table.
     debugSearch: debugSearch,
     // DOM node for a tree ID from the latest tree, e.g. PageLens.nodeFor('n12').

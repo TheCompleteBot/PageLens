@@ -141,7 +141,7 @@
         "evidence": [{ "text": "Chats 3", "match": "Chats" }] } },
     { "id": "dash-14", "site": "dashboard", "type": "navigate", "question": "Show me the revenue chart",
       "expected": { "action": "highlight", "match": "found",
-        "evidence": [{ "text": "Overview · chart or graphic (the chart card, or the chart itself)", "match": "chart or graphic" }] } },
+        "evidence": [{ "text": "Overview · chart: Jan Feb Mar … $0 $1500 … (the chart card, or the chart itself)", "match": "chart" }] } },
     { "id": "dash-15", "site": "dashboard", "type": "absent", "question": "What are our expenses this month?",
       "expected": { "action": "abstain" } },
     { "id": "dash-16", "site": "dashboard", "type": "absent", "question": "What's the conversion rate?",

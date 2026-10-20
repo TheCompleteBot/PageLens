@@ -25,7 +25,7 @@
     { "site": "dashboard", "q": "what is the total revenue?", "expect": [{ "action": "answer", "has": ["45,231.89"] }] },
     { "site": "dashboard", "q": "what is our profit?", "expect": [{ "action": "abstain" }] },
     { "site": "dashboard", "q": "how much did revenue grow compared to last month?", "expect": [{ "action": "answer", "has": ["+20.1%"] }] },
-    { "site": "dashboard", "q": "how many sales did we make this month?", "note": "the page gives two figures; both should be sent", "expect": [{ "action": "answer", "has": ["12,234", "265 sales"] }] },
+    { "site": "dashboard", "q": "how many sales did we make this month?", "note": "\"You made 265 sales this month\" is the figure for this month; the Sales card (+12,234, +19% from last month) is ambiguous, so it may be included but is not required", "expect": [{ "action": "answer", "has": ["265 sales"] }] },
     { "site": "dashboard", "q": "who was the biggest customer in recent sales?", "expect": [{ "action": "answer", "has": ["1,999.00"] }] },
     { "site": "dashboard", "q": "how much did Jackson Lee spend?", "note": "the amount node alone is fine; the answer step also gets its path (Sofia Davis paid $39.00 too)", "expect": [{ "action": "answer", "has": ["39.00"] }] },
     { "site": "dashboard", "q": "how many users are online right now?", "expect": [{ "action": "answer", "has": ["573"] }] },

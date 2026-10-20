@@ -152,9 +152,20 @@ function isGraphic(el) {
   return rect.width >= 100 && rect.height >= 60;
 }
 
+// A chart's label: its accessible name, else its own visible text (axis and legend
+// labels, e.g. "chart: Jan Feb Mar … $0 $1500 $3000"), so the AI can tell what it
+// shows. The values drawn as bars or lines can't be read.
 function graphicLabel(el) {
   var title = el.querySelector('title');
-  return el.getAttribute('aria-label') || (title && title.textContent) || 'chart or graphic';
+  var name = el.getAttribute('aria-label') || (title && title.textContent);
+  if (name) return name;
+  var seen = new Set();
+  var labels = [];
+  Array.prototype.forEach.call(el.querySelectorAll('text'), function (t) {
+    var s = (t.textContent || '').trim();
+    if (s && !seen.has(s)) { seen.add(s); labels.push(s); }
+  });
+  return labels.length >= 2 ? 'chart: ' + labels.join(' ') : 'chart or graphic';
 }
 
 // The visible text that best describes an element. Never reads input values.
@@ -209,7 +220,7 @@ function extractItems() {
 
     var isHeading = el.matches(HEADING_SELECTOR);
     var isContainer = el.matches(CONTAINER_SELECTOR);
-    var text = graphic ? clean(graphicLabel(el)) : isCandidate || clickable ? clean(textOf(el)) : '';
+    var text = graphic ? clean(graphicLabel(el), MAX_CONTENT) : isCandidate || clickable ? clean(textOf(el)) : '';
     // Content blocks (and unlabelled containers with their own text) use their content.
     if (!text && blockText) text = clean(blockText, MAX_CONTENT);
     var ariaLabel = clean(el.getAttribute('aria-label') || labelledByText(el));

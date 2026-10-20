@@ -21,6 +21,10 @@ var WIDGET_CSS = [
   '.user { align-self: flex-end; background: #4f46e5; color: #fff; }',
   '.bot { align-self: flex-start; background: #fff; border: 1px solid #e5e7eb; }',
   '.bot.wide { max-width: 100%; width: 100%; }',
+  '.links { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }',
+  '.link { border: 1px solid #f59e0b; background: #fffbeb; color: #92400e; border-radius: 12px; padding: 2px 9px;',
+  '  font: 12px system-ui, sans-serif; cursor: pointer; }',
+  '.link:hover { background: #fef3c7; }',
   '.detail { margin: 6px 0 0; max-height: 280px; overflow: auto; padding: 6px; border-radius: 6px; background: #f3f4f6;',
   '  font: 11px/1.4 ui-monospace, Menlo, monospace; white-space: pre; }',
   '.loading { color: #6b7280; }',
@@ -95,11 +99,25 @@ function mountWidget() {
 
   if (config.debug) mountTreeView(root, panel, messages, form);
 
-  // Adds a chat bubble. `detail` (optional) is shown as a scrollable code block.
-  function addMessage(className, text, detail) {
+  // Adds a chat bubble. `links` (optional): [{ n, label }] buttons that scroll to
+  // highlight n. `detail` (optional, debug) is shown as a scrollable code block.
+  function addMessage(className, text, detail, links) {
     var msg = document.createElement('div');
     msg.className = 'msg ' + className;
     msg.textContent = text;
+    if (links && links.length) {
+      var row = document.createElement('div');
+      row.className = 'links';
+      links.forEach(function (link) {
+        var button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'link';
+        button.textContent = (links.length > 1 ? link.n + ' · ' : '') + (link.label || 'Show on page');
+        button.addEventListener('click', function () { focusHighlight(link.n); });
+        row.appendChild(button);
+      });
+      msg.appendChild(row);
+    }
     if (detail) {
       msg.classList.add('wide');
       var pre = document.createElement('pre');
@@ -127,7 +145,7 @@ function mountWidget() {
     answerQuery(query)
       .then(function (reply) {
         loading.remove();
-        addMessage('bot', reply.text, reply.detail);
+        addMessage('bot', reply.text, reply.detail, reply.links);
       })
       .catch(function (err) {
         loading.remove();

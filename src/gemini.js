@@ -126,7 +126,9 @@ function geminiGenerate(body) {
   function attempt(i) {
     var model = models[i];
     var request = Object.assign({}, body);
-    if (THINKING_LEVELS[model]) request.generationConfig = { thinkingConfig: { thinkingLevel: THINKING_LEVELS[model] } };
+    // Keep the caller's settings (e.g. a JSON response schema) and add the model's thinking level.
+    request.generationConfig = Object.assign({}, body.generationConfig);
+    if (THINKING_LEVELS[model]) request.generationConfig.thinkingConfig = { thinkingLevel: THINKING_LEVELS[model] };
     return geminiPost(model, 'generateContent', request, GENERATE_TRIES).then(function (json) {
       var candidate = (json.candidates || [])[0];
       if (!candidate || !candidate.content) {
