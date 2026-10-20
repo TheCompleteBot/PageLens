@@ -16,7 +16,10 @@
 //   node tests/run.mjs --ids dev-10,dev-20   only these case ids
 //   node tests/run.mjs --gap 10           seconds between one worker's queries (rate limits)
 //   node tests/run.mjs --parallel 2       workers (default: one per API key)
-//   node tests/run.mjs --keys GEMINI_API_KEY_3   only these .env keys (comma-separated names)
+//   node tests/run.mjs --keys GEMINI_API_KEY_3   only these .env keys (comma-separated names; any
+//                                         variable name, e.g. --keys key1,key2)
+//   node tests/run.mjs --answer           run the whole pipeline: retrieval, explorer, answer step
+//                                         (one more LLM call per query), and score all three
 //   node tests/run.mjs --set test --check checks the set itself, without the LLM: lists
 //                                         the page nodes each evidence item matches
 //
@@ -60,17 +63,24 @@ const SET = arg('set', 'dev');
 const CHECK = process.argv.includes('--check');
 const REPORT_FROM = arg('report', '');
 const RETRY_FROM = arg('retry-errors', '');
+const WITH_ANSWER = process.argv.includes('--answer');
 
-// GEMINI_API_KEY, GEMINI_API_KEY_2, ... from .env (values never printed).
+// API keys from .env (values never printed): GEMINI_API_KEY, GEMINI_API_KEY_2, ...
+// by default, or exactly the variables named with --keys.
+const KEY_NAMES = arg('keys', '').split(',').filter(Boolean);
 function readKeys() {
   let env = '';
   try { env = readFileSync(join(HERE, '..', '.env'), 'utf8'); } catch { return []; }
-  const found = [...env.matchAll(/^\s*(GEMINI_API_KEY(?:_\d+)?)\s*=\s*["']?([^"'\s#]+)/gm)]
-    .map((m) => ({ name: m[1], value: m[2] }));
+  const found = [...env.matchAll(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*["']?([^"'\s#]+)/gm)]
+    .map((m) => ({ name: m[1], value: m[2] }))
+    .filter((k) => (KEY_NAMES.length ? KEY_NAMES.includes(k.name) : /^GEMINI_API_KEY(_\d+)?$/.test(k.name)));
   return found.filter((k, i) => found.findIndex((o) => o.value === k.value) === i); // drop duplicates
 }
-const KEY_NAMES = arg('keys', '').split(',').filter(Boolean);
-const KEYS = readKeys().filter((k) => !KEY_NAMES.length || KEY_NAMES.includes(k.name));
+const KEYS = readKeys();
+if (KEY_NAMES.length && KEYS.length < KEY_NAMES.length) {
+  console.error('Not found in .env: ' + KEY_NAMES.filter((n) => !KEYS.some((k) => k.name === n)).join(', '));
+  process.exit(1);
+}
 const PARALLEL = Math.max(1, Number(arg('parallel', KEYS.length || 1)));
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -153,15 +163,22 @@ const PAGE_HELPERS = `
       text: treeText(node), context: context(node) };
   }`;
 
-const EXPLORE = (q) => `PageLens.explore(${JSON.stringify(q)}).then(function (s) {
+// One query in the page. Records all three stages:
+//   retrieval  the automatic first search's ranked hits
+//   explorer   action, targets, hand-off context, cost
+//   answer     (with --answer) reply, status, highlights, attempts
+const EXPLORE = (q) => `(${WITH_ANSWER} ? PageLens.answer(${JSON.stringify(q)}).then(function (res) { return res.state; })
+    : PageLens.explore(${JSON.stringify(q)})).then(function (s) {
   ${PAGE_HELPERS}
   var tokens = 0;
   s.steps.forEach(function (st) { tokens += (st.tokens && st.tokens.totalTokenCount) || 0; });
-  return {
+  var out = {
     action: s.result.action, match: s.result.match || '', note: s.result.note || '',
     targets: s.result.targets.map(function (id) { return describeNode(s.tree.byId.get(id)); }),
     // The rest of the hand-off to the answer step: other nodes the explorer read.
     context: s.handoff.context.map(function (c) { return describeNode(s.tree.byId.get(c.id)); }),
+    retrieval: { mode: s.start.search.retrieval, hits: (s.start.search.results || []).map(function (h) {
+      var d = describeNode(s.tree.byId.get(h.id)); d.via = h.via; return d; }) },
     toolCalls: s.toolCalls, turns: s.steps.length, tokens: tokens, ms: s.ms,
     // True if any search in this run fell back to keywords only (no key, rate limit,
     // API error): such runs explore with half of search missing.
@@ -172,6 +189,16 @@ const EXPLORE = (q) => `PageLens.explore(${JSON.stringify(q)}).then(function (s)
     calls: [].concat.apply([], s.steps.map(function (st) { return st.calls.map(function (c) {
       return c.name + JSON.stringify(c.args || {}) + (c.error ? ' ✗ ' + c.error : ''); }); }))
   };
+  if (s.answer) {
+    var a = s.answer;
+    var aTokens = 0;
+    a.attempts.forEach(function (at) { aTokens += (at.tokens && at.tokens.totalTokenCount) || 0; });
+    out.answer = { status: a.status, reply: a.reply, attempts: a.attempts.length, ms: a.ms, tokens: aTokens,
+      firstPass: !!a.attempts.length && !a.attempts[0].problems.length,
+      problems: [].concat.apply([], a.attempts.map(function (at) { return at.problems; })),
+      highlights: a.highlights.map(function (h) { return describeNode(s.tree.byId.get(h.id)); }) };
+  }
+  return out;
 })`;
 
 // ---- Cases: both files in one shape ----
@@ -217,6 +244,99 @@ function score(r, c) {
       (s.recall === best.recall && s.contextRecall === best.contextRecall && s.precision > best.precision)) best = s;
   }
   return best || none;
+}
+
+// ---- Stage 1: retrieval (the automatic first search, before any LLM call) ----
+// Evidence recall in the top k hits, and the reciprocal rank of the first hit that
+// covers any evidence. Only for cases with evidence (not abstain-only cases).
+function retrievalScore(r, c) {
+  if (r.error || !r.retrieval) return null;
+  const withEvidence = c.outcomes.filter((o) => o.action !== 'abstain' && (o.evidence || []).length);
+  if (!withEvidence.length) return null;
+  let best = null;
+  for (const o of withEvidence) {
+    const at = (k) => o.evidence.filter((e) => r.retrieval.hits.slice(0, k).some((h) => covers(h, e))).length / o.evidence.length;
+    const first = r.retrieval.hits.findIndex((h) => o.evidence.some((e) => covers(h, e)));
+    const sc = { r1: at(1), r3: at(3), r8: at(8), rr: first === -1 ? 0 : 1 / (first + 1), hybrid: r.retrieval.mode === 'hybrid' };
+    if (!best || sc.r8 > best.r8 || (sc.r8 === best.r8 && sc.rr > best.rr)) best = sc;
+  }
+  return best;
+}
+
+// ---- Stage 3: answer step ----
+
+const NUMBER_RE = /\d[\d,]*(?:\.\d+)?/g;
+const numbersOf = (t) => (String(t || '').match(NUMBER_RE) || []).map((n) => parseFloat(n.replace(/,/g, ''))).filter((n) => !isNaN(n));
+const normText = (t) => String(t || '').normalize('NFKC').toLowerCase().replace(/[–—−]/g, '-').replace(/[“”‘’"'`|·•:;,()]/g, ' ').replace(/\s+/g, ' ').trim();
+
+// The facts a correct reply must state, for `answer` outcomes. For compute questions,
+// the values in the reference answer (the result: "₹3,098", "+180.1%"); otherwise
+// the evidence: its numbers if it has any ("+201 since last hour" -> 201), else its
+// words ("Electronics").
+function answerFacts(c, o) {
+  if (o.action !== 'answer') return [];
+  if (c.type === 'compute' && o.answer) {
+    const values = o.answer.match(/[₹$]\s?\d[\d,]*(?:\.\d+)?|[+-]?\d[\d,]*(?:\.\d+)?%|\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d+/g) || [];
+    const nums = [...new Set(values.flatMap(numbersOf))];
+    if (nums.length) return nums.map((n) => ({ number: n }));
+  }
+  return (o.evidence || []).flatMap((e) => (/\d/.test(e.match) ? numbersOf(e.match).map((n) => ({ number: n })) : [{ text: e.match }]));
+}
+
+function factIn(reply, f) {
+  return f.number !== undefined ? numbersOf(reply).some((n) => Math.abs(n - f.number) < 0.005) : normText(reply).includes(normText(f.text));
+}
+
+const isFinalAbstain = (a) => a && (a.status === 'abstain' || a.status === 'unconfirmed');
+
+// End-to-end: is what the visitor sees right? gold abstain -> the reply abstains;
+// answer -> reply ok, states every fact, highlights some evidence; highlight -> reply
+// ok and the highlights cover the evidence.
+function answerScore(r, c) {
+  if (r.error || !r.answer) return null;
+  const a = r.answer;
+  let best = { correct: false, factRecall: NaN, hlRecall: NaN, hlPrecision: NaN };
+  for (const o of c.outcomes) {
+    if (o.action === 'abstain') {
+      if (isFinalAbstain(a)) return { correct: true, factRecall: NaN, hlRecall: NaN, hlPrecision: NaN };
+      continue;
+    }
+    const ev = o.evidence || [];
+    const hl = a.highlights;
+    const hlRecall = ev.length ? ev.filter((e) => hl.some((h) => covers(h, e))).length / ev.length : NaN;
+    const hlPrecision = hl.length && ev.length ? hl.filter((h) => ev.some((e) => covers(h, e))).length / hl.length : NaN;
+    const facts = answerFacts(c, o);
+    const factRecall = facts.length ? facts.filter((f) => factIn(a.reply, f)).length / facts.length : NaN;
+    const correct = a.status === 'ok' && (o.action === 'answer'
+      ? (Number.isNaN(factRecall) || factRecall === 1) && (Number.isNaN(hlRecall) || hlRecall > 0)
+      : (Number.isNaN(hlRecall) || hlRecall === 1));
+    const sc = { correct, factRecall, hlRecall, hlPrecision };
+    const rank = (x) => (x.correct ? 2 : 0) + (Number.isNaN(x.factRecall) ? 0 : x.factRecall) + (Number.isNaN(x.hlRecall) ? 0 : x.hlRecall);
+    if (rank(sc) > rank(best)) best = sc;
+  }
+  return best;
+}
+
+// ---- Abstain as binary classification (positive = abstain) ----
+// Gold: abstain if every acceptable outcome abstains, answer/highlight if none does;
+// cases where both are acceptable are left out. Cohen's kappa corrects the agreement
+// between predicted and gold for the agreement expected by chance.
+function abstainStats(rows, predicted) {
+  let tp = 0, fn = 0, tn = 0, fp = 0, skipped = 0;
+  rows.forEach((x) => {
+    const all = x.c.outcomes.every((o) => o.action === 'abstain');
+    const none = x.c.outcomes.every((o) => o.action !== 'abstain');
+    if (!all && !none) { skipped++; return; }
+    const p = predicted(x);
+    if (all) { if (p) tp++; else fn++; } else { if (p) fp++; else tn++; }
+  });
+  const n = tp + fn + tn + fp;
+  const po = n ? (tp + tn) / n : NaN;
+  const pe = n ? ((tp + fp) * (tp + fn) + (fn + tn) * (fp + tn)) / (n * n) : NaN;
+  return { tp, fn, tn, fp, skipped, n,
+    tpr: tp + fn ? tp / (tp + fn) : NaN, tnr: tn + fp ? tn / (tn + fp) : NaN,
+    precision: tp + fp ? tp / (tp + fp) : NaN, accuracy: po,
+    kappa: n && pe < 1 ? (po - pe) / (1 - pe) : NaN };
 }
 
 function describe(r) {
@@ -277,6 +397,82 @@ function metricsLine(label, m) {
     `${Number.isNaN(m.handoff_chars) ? '    -' : Math.round(m.handoff_chars).toString().padStart(5)}`;
 }
 
+// Stage 1 and 3 metrics over completed runs.
+function retrievalMetrics(all) {
+  const rows = all.filter((x) => !x.r.error && x.r.rscore);
+  return { runs: rows.length,
+    r1: mean(rows.map((x) => x.r.rscore.r1)), r3: mean(rows.map((x) => x.r.rscore.r3)),
+    r8: mean(rows.map((x) => x.r.rscore.r8)), mrr: mean(rows.map((x) => x.r.rscore.rr)),
+    hybrid: mean(rows.map((x) => (x.r.rscore.hybrid ? 1 : 0))) };
+}
+
+function answerMetrics(all) {
+  const rows = all.filter((x) => !x.r.error && x.r.answer);
+  const st = (k) => mean(rows.map((x) => (x.r.answer.status === k ? 1 : 0)));
+  const called = rows.filter((x) => x.r.answer.attempts);
+  const facts = rows.filter((x) => x.r.ascore && !Number.isNaN(x.r.ascore.factRecall));
+  const hls = rows.filter((x) => x.r.ascore && !Number.isNaN(x.r.ascore.hlRecall));
+  const hlp = rows.filter((x) => x.r.ascore && !Number.isNaN(x.r.ascore.hlPrecision));
+  const byCase = new Map();
+  rows.forEach((x) => byCase.set(x.c.id, (byCase.get(x.c.id) || []).concat([!!(x.r.ascore && x.r.ascore.correct)])));
+  return { runs: rows.length,
+    correct: mean(rows.map((x) => (x.r.ascore && x.r.ascore.correct ? 1 : 0))),
+    allRuns: byCase.size ? [...byCase.values()].filter((v) => v.every(Boolean)).length / byCase.size : NaN,
+    ok: st('ok'), unconfirmed: st('unconfirmed'), abstain: st('abstain'),
+    firstPass: mean(called.map((x) => (x.r.answer.firstPass ? 1 : 0))),
+    factRecall: mean(facts.map((x) => x.r.ascore.factRecall)),
+    allFacts: mean(facts.map((x) => (x.r.ascore.factRecall === 1 ? 1 : 0))),
+    hlRecall: mean(hls.map((x) => x.r.ascore.hlRecall)), hlPrecision: mean(hlp.map((x) => x.r.ascore.hlPrecision)),
+    ms: mean(rows.map((x) => (x.r.ms || 0) + (x.r.answer.ms || 0))),
+    tokens: mean(rows.map((x) => (x.r.tokens || 0) + (x.r.answer.tokens || 0))) };
+}
+
+const fp = (x) => (Number.isNaN(x) ? '  - ' : pct(x).padStart(4));
+const f2 = (x) => (Number.isNaN(x) ? '   -' : x.toFixed(2).padStart(4));
+
+function stageTables(rows, selected) {
+  const lines = [];
+  const groups = [['overall', rows]]
+    .concat([...new Set(selected.map((c) => c.site))].map((site) => [site, rows.filter((x) => x.c.site === site)]))
+    .concat([['', null]])
+    .concat([...new Set(selected.map((c) => c.type))].map((t) => [t, rows.filter((x) => x.c.type === t)]));
+  const table = (header, fn) => {
+    lines.push(header);
+    groups.forEach(([label, g]) => { if (!g) lines.push(''); else { const l = fn(label, g); if (l) lines.push(l); } });
+    lines.push('');
+  };
+
+  lines.push('## Stage 1: retrieval (automatic first search, top 8 shown to the explorer)', '');
+  table('             runs  rec@1  rec@3  rec@8   MRR  hybrid', (label, g) => {
+    const m = retrievalMetrics(g);
+    return m.runs ? `${label.padEnd(12)} ${String(m.runs).padStart(4)}   ${fp(m.r1)}   ${fp(m.r3)}   ${fp(m.r8)}  ${f2(m.mrr)}   ${fp(m.hybrid)}` : null;
+  });
+
+  lines.push('## Stage 2: explorer', '');
+  table(METRICS_HEADER, (label, g) => metricsLine(label, metrics(g)));
+
+  if (rows.some((x) => x.r.answer)) {
+    lines.push('## Stage 3: answer step (end to end: what the visitor sees)', '');
+    table('             runs  corr  all3    ok  unco  abst  1st✓  fact  allf  hl-r  hl-p   secs  tokens', (label, g) => {
+      const m = answerMetrics(g);
+      return m.runs ? `${label.padEnd(12)} ${String(m.runs).padStart(4)}  ${fp(m.correct)}  ${fp(m.allRuns)}  ${fp(m.ok)}  ` +
+        `${fp(m.unconfirmed)}  ${fp(m.abstain)}  ${fp(m.firstPass)}  ${fp(m.factRecall)}  ${fp(m.allFacts)}  ${fp(m.hlRecall)}  ` +
+        `${fp(m.hlPrecision)}  ${(m.ms / 1000).toFixed(1).padStart(5)}  ${Math.round(m.tokens).toString().padStart(6)}` : null;
+    });
+  }
+
+  lines.push('## Abstain (positive = abstain)', '');
+  const done = rows.filter((x) => !x.r.error);
+  const show = (name, st) => {
+    lines.push(`${name}: TPR ${fp(st.tpr)}  TNR ${fp(st.tnr)}  precision ${fp(st.precision)}  accuracy ${fp(st.accuracy)}  ` +
+      `Cohen's kappa ${f2(st.kappa)}   (TP ${st.tp}, FN ${st.fn}, TN ${st.tn}, FP ${st.fp}; ${st.skipped} run(s) of cases where both are acceptable left out)`);
+  };
+  show('Explorer decision', abstainStats(done, (x) => x.r.action === 'abstain'));
+  if (done.some((x) => x.r.answer)) show('Final reply      ', abstainStats(done.filter((x) => x.r.answer), (x) => isFinalAbstain(x.r.answer)));
+  lines.push('');
+  return lines;
+}
+
 // ---- Report ----
 
 function gitCommit() {
@@ -299,24 +495,35 @@ function reportLines(selected, results) {
       const mark = ok === runs.length ? '✓' : ok ? '~' : '✗';
       const hl = runs.filter((r) => r.score.success).length;
       lines.push(`${mark} ${ok}/${runs.length} answerable, ${hl}/${runs.length} targets  ${c.id.padEnd(9)} ${c.question}`);
-      runs.forEach((r) => { if (!r.score.success) lines.push('      ' + (r.score.answerable ? '~ ' : '✗ ') + describe(r)); });
+      runs.forEach((r) => {
+        if (!r.score.success) lines.push('      ' + (r.score.answerable ? '~ ' : '✗ ') + describe(r));
+        if (r.answer && r.ascore && !r.ascore.correct) {
+          lines.push('      ✗ reply [' + r.answer.status + ']: ' + r.answer.reply.replace(/\s+/g, ' ').slice(0, 160));
+        }
+      });
     });
     lines.push('');
   }
   const rows = [];
   selected.forEach((c, ci) => results[ci].forEach((r) => rows.push({ c, r, s: r.score })));
-  const summary = { overall: metrics(rows), bySite: {}, byType: {} };
-  lines.push(METRICS_HEADER, metricsLine('overall', summary.overall));
-  for (const site of [...new Set(selected.map((c) => c.site))]) {
-    summary.bySite[site] = metrics(rows.filter((x) => x.c.site === site));
-    lines.push(metricsLine(site, summary.bySite[site]));
-  }
-  lines.push('');
-  for (const type of [...new Set(selected.map((c) => c.type))]) {
-    summary.byType[type] = metrics(rows.filter((x) => x.c.type === type));
-    lines.push(metricsLine(type, summary.byType[type]));
-  }
+  const summary = { overall: metrics(rows), bySite: {}, byType: {},
+    retrieval: retrievalMetrics(rows), answer: answerMetrics(rows),
+    abstain: { explorer: abstainStats(rows.filter((x) => !x.r.error), (x) => x.r.action === 'abstain'),
+      final: abstainStats(rows.filter((x) => !x.r.error && x.r.answer), (x) => isFinalAbstain(x.r.answer)) } };
+  for (const site of [...new Set(selected.map((c) => c.site))]) summary.bySite[site] = metrics(rows.filter((x) => x.c.site === site));
+  for (const type of [...new Set(selected.map((c) => c.type))]) summary.byType[type] = metrics(rows.filter((x) => x.c.type === type));
+  lines.push(...stageTables(rows, selected));
   lines.push('',
+    'Retrieval: rec@k = share of the needed evidence in the first k hits of the automatic search; MRR = mean of',
+    '1/rank of the first hit holding any evidence (1 = always first); hybrid = keyword + meaning (not keyword-only).',
+    'Answer: corr = end-to-end correct (abstain cases: the reply abstains; answer: reply ok, states every key fact,',
+    'highlights evidence; highlight: reply ok, highlights cover the evidence). all3 = questions correct in every run.',
+    'ok / unco / abst = reply status: answered, checks failed twice ("couldn\'t confirm"), abstained. 1st✓ = passed',
+    'the checks on the first try. fact = share of key facts of the reference answer stated in the reply; allf = all',
+    'of them. hl-r / hl-p = highlight recall / precision against the evidence. secs, tokens: explorer + answer.',
+    'Abstain: TPR = abstained when it should, TNR = answered when it should, kappa = agreement beyond chance',
+    '(1 perfect, 0 chance). Final reply counts "couldn\'t confirm" as abstaining.',
+    'Explorer columns:',
     'runs = completed runs (all rates are over these). err = runs that failed with an error (not counted).',
     'kw = completed runs where search fell back to keywords only (embeddings unavailable).',
     'answ = answerable: right action, and the hand-off (targets + other text given to the answer step) covers all evidence.',
@@ -343,7 +550,7 @@ function saveRun(run) {
   }
   const md = join(HERE, 'reports', run.stamp + '-' + run.set + '.md');
   writeFileSync(md, [
-    `# Explorer evaluation: ${run.setFile}`,
+    `# PageLens evaluation: ${run.setFile}${run.withAnswer ? ' (retrieval, explorer, answer)' : ' (retrieval, explorer)'}`,
     '',
     `- When: ${run.started}`,
     `- Code: ${run.commit}`,
@@ -371,7 +578,7 @@ if (REPORT_FROM) {
     .filter(Boolean);
   const results = selected.map((c) => {
     const saved = data.cases.find((x) => (x.question || x.q) === c.question);
-    return saved.runs.map((r) => ({ ...r, score: score({ context: [], ...r }, c) }));
+    return saved.runs.map((r) => { const x = { context: [], ...r }; return { ...r, score: score(x, c), rscore: retrievalScore(x, c), ascore: answerScore(x, c) }; });
   });
   const stamp = (REPORT_FROM.match(/(\d{4}-\d\d-\d\dT[\d-]+Z)/) || [])[1] || new Date().toISOString().replace(/[:.]/g, '-');
   saveRun({ set: setName, setFile: data.set || loadSet(setName).file, runs: data.runs, selected, results, keys: data.keys,
@@ -443,7 +650,7 @@ if (RETRY_FROM) {
     const c = fresh.cases.find((f) => f.question === (saved.question || saved.q));
     if (c) selected.push(Object.assign(c, { saved }));
   });
-  results = selected.map((c) => c.saved.runs.map((r) => ({ ...r, score: score({ context: [], ...r }, c) })));
+  results = selected.map((c) => c.saved.runs.map((r) => { const x = { context: [], ...r }; return { ...r, score: score(x, c), rscore: retrievalScore(x, c), ascore: answerScore(x, c) }; }));
   selected.forEach((c, ci) => results[ci].forEach((r, k) => { if (r.error) jobs.push({ c, ci, k }); }));
   retryNote = `retried ${jobs.length} errored run(s) of ${RETRY_FROM.replace(HERE + '/', 'tests/')}`;
   if (!jobs.length) { console.log('No errored runs in ' + RETRY_FROM); process.exit(0); }
@@ -476,7 +683,7 @@ async function worker(w) {
       first = false;
       let r;
       try { r = await chrome.evaluate(EXPLORE(job.c.question)); } catch (err) { r = { error: err.message }; }
-      r.score = score(r, job.c);
+      r.score = score(r, job.c); r.rscore = retrievalScore(r, job.c); r.ascore = answerScore(r, job.c);
       r.worker = w + 1;
       results[job.ci][job.k] = r;
       done++;
@@ -492,4 +699,5 @@ await Promise.all(Array.from({ length: workers }, (_, w) => worker(w)));
 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-');
 saveRun({ set: runSet, setFile: runSetFile, runs: runCount, selected, results, keys: rekeyStats, stamp, note: retryNote || undefined,
+  withAnswer: WITH_ANSWER,
   commit: gitCommit(), started: new Date().toISOString() });

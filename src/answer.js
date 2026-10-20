@@ -77,7 +77,9 @@ var ANSWER_PROMPT = [
 var ANSWER_MODES = {
   answer: 'The previous step found text that should answer the question. Answer it.',
   found: 'The visitor wants to find something, and the previous step found it. Say in one short sentence what it is and ' +
-    'where (e.g. "Here\'s the Down Sleeping Bag, under Camping [1]."), and cite it so it can be highlighted.',
+    'where (e.g. "Here\'s the Down Sleeping Bag, under Camping [1]."), and cite it so it can be highlighted. ' +
+    'If several page elements match the request, in main or related text (e.g. "camping gear" -> the Tents section ' +
+    'and the Sleeping Bags section), name and cite each one: "Here are Tents [1] and Sleeping Bags [2]."',
   maybe: 'The exact thing is not listed on this page, but it might be behind a link or section the previous step found, ' +
     'or shown in a chart whose values can\'t be read as text. Say that it isn\'t stated here and where the visitor ' +
     'might find it (e.g. "Kayaks aren\'t listed here, but you might find them under See all water sports [1]." or ' +

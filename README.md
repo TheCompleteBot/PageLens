@@ -155,6 +155,14 @@ node tests/run.mjs                  # dev set, 3 runs per case
 node tests/run.mjs --set test       # test set
 node tests/run.mjs --set test --check
 node tests/run.mjs --site dashboard --runs 5 --only "profit"
+node tests/run.mjs --set test --answer --keys key1,key2,key3,key4   # all three stages
 ```
 
-API keys: the runner uses every `GEMINI_API_KEY`, `GEMINI_API_KEY_2`, ... in `.env`, one headless Chrome per key, swapping the key into the page's Gemini requests. Rate limits are per Google Cloud project, so extra keys only help if they have their own quota. Each worker spaces its queries ~10 s apart (`--gap`). Every run saves a readable report to `tests/reports/<time>-<set>.md` (committed, so the history of scores stays in the repo) and every run's details to `tests/results/` (git-ignored). `node tests/run.mjs --report tests/results/<file>.json` rebuilds a report from saved details with the current scoring. Rates are over completed runs: runs that failed with an error (e.g. a 429 rate limit) are counted separately (`err`), and `node tests/run.mjs --retry-errors tests/results/<file>.json` reruns just those and saves a new report. `kw` counts runs where search fell back to keywords only.
+The report scores each stage separately:
+
+- **Retrieval** (the automatic first search, before any LLM call): recall@1/3/8 of the needed evidence among the search hits, and MRR.
+- **Explorer**: answerable, action accuracy, target and context recall, target precision, abstain precision/recall, cost.
+- **Answer step** (with `--answer`, one more LLM call per query): end-to-end correctness (what the visitor sees), reply status (answered / couldn't confirm / abstained), first-try check pass rate, fact recall against the reference answer's key values, highlight recall/precision.
+- **Abstain** as binary classification for both the explorer's decision and the final reply: TPR, TNR, precision, accuracy and Cohen's kappa (cases where both abstaining and answering are acceptable are left out).
+
+API keys: the runner uses every `GEMINI_API_KEY`, `GEMINI_API_KEY_2`, ... in `.env`, or exactly the variables named with `--keys` (any names, e.g. `key1,key2`), one headless Chrome per key, swapping the key into the page's Gemini requests. Rate limits are per Google Cloud project, so extra keys only help if they have their own quota. Each worker spaces its queries ~10 s apart (`--gap`). Every run saves a readable report to `tests/reports/<time>-<set>.md` (committed, so the history of scores stays in the repo) and every run's details to `tests/results/` (git-ignored). `node tests/run.mjs --report tests/results/<file>.json` rebuilds a report from saved details with the current scoring. Rates are over completed runs: runs that failed with an error (e.g. a 429 rate limit) are counted separately (`err`), and `node tests/run.mjs --retry-errors tests/results/<file>.json` reruns just those and saves a new report. `kw` counts runs where search fell back to keywords only.
