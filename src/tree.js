@@ -7,6 +7,7 @@ var MAX_READ = 1500;    // Characters returned by one read().
 var MAX_SEARCH = 8;     // Results returned by one search().
 var MAX_PREVIEW = 60;   // Characters in a group's preview label.
 var MIN_RECORDS = 3;    // Repeated siblings needed to form a list of records.
+var MAX_DETAILS = 100;  // Characters of a card's inner text shown in its summary.
 
 // The latest tree: { roots: [node], byId: Map(id -> node), seen: Set(id) }.
 // node = { id, el, kind, data, title, children: [node], parent, depth }, where kind is
@@ -249,8 +250,35 @@ function nodeLabel(node) {
   return node.kind === 'list' ? node.children.length + ' items: ' + preview : preview;
 }
 
+// A node's text as plain lines: its own text, then its subtree's, one line per
+// node, without ids and without a line that repeats the one above (a card's title
+// is usually also its heading). Subtrees of nodes in `exclude` (a Set) are left
+// out, so text already given elsewhere isn't repeated.
+function plainText(node, exclude) {
+  var lines = [];
+  (function walk(n) {
+    if (exclude && exclude.has(n)) return;
+    // Own text only: for groups and lists nodeLabel would be a preview of the children.
+    var d = n.data || {};
+    var line = n.title || d.text || d.label || (n.children.length ? '' : d.href || '');
+    if (line && line !== lines[lines.length - 1]) lines.push(line);
+    n.children.forEach(walk);
+  })(node);
+  var text = lines.join('\n'); // labels are already cleaned and PII-redacted by the extractor
+  return text.length > MAX_READ ? text.slice(0, MAX_READ - 1) + '…' : text;
+}
+
+// The text inside a card, minus its title, on one line: what a summary shows as
+// `details`, so prices and figures are visible without a read().
+function cardDetails(node) {
+  var title = nodeLabel(node);
+  var inner = plainText(node).split('\n').filter(function (line) { return line !== title; }).join(' · ');
+  return inner ? clean(inner, MAX_DETAILS) : '';
+}
+
 // One-line description of a node, as the AI sees it. section/near are left out:
-// the tree position already says where a node is.
+// the tree position already says where a node is. Cards (product records, small
+// titled groups) also get `details`: the text inside them.
 function summarize(node) {
   var s = { id: node.id, tag: nodeTag(node) };
   var text = nodeLabel(node);
@@ -260,16 +288,23 @@ function summarize(node) {
       if (node.data[key] && node.data[key] !== text) s[key] = node.data[key];
     });
   }
+  if (node.children.length && isCard(node)) {
+    var details = cardDetails(node);
+    if (details) s.details = details;
+  }
   var below = countDescendants(node);
   if (below) s.contains = below;
   return s;
 }
 
 // "Electronics > list (4) > 20000mAh Power Bank, 22.5W fast charging".
-// Lists show as "list (N)": their preview label would waste tokens here.
+// Lists show as "list (N)": their preview label would waste tokens here. Groups
+// without a title are skipped: their label would only be a preview of their
+// children ("Toggle Sidebar · Overview · …").
 function pathOf(node) {
   var parts = [];
   for (var n = node.parent; n; n = n.parent) {
+    if (n.kind === 'group' && !n.title) continue;
     parts.unshift(n.kind === 'list' ? 'list (' + n.children.length + ')' : clean(nodeLabel(n), 40));
   }
   return parts.join(' > ');

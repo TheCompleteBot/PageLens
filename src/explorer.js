@@ -9,6 +9,8 @@ var MAX_TOOL_CALLS = 8;   // expand/read/search calls per query; after that only
 var MAX_SEARCHES = 3;     // search calls per query, including the automatic first one
 var MAX_TARGETS = 3;      // nodes one finish may point to
 var MAX_EXPLORE_MS = 30000; // after this, the next turn may only finish
+var HANDOFF_SEARCH_HITS = 3;   // top hits of the automatic search added to the hand-off
+var HANDOFF_EXPLORER_HITS = 2; // top hits of each search the explorer made itself
 var ACTIONS = ['highlight', 'answer', 'abstain'];
 // For highlight: the thing itself is here, or it might be behind this link/section.
 var MATCHES = ['found', 'maybe'];
@@ -27,6 +29,7 @@ function makeState(query, t) {
     done: new Set(),     // "name {args}" of calls already made, to block repeats
     rejections: 0,       // finish calls sent back for fixing
     searchJourneys: [],  // step-by-step record of each search the navigator made
+    searchHits: [],      // [{ text, within, ids }]: ranked result ids of each search the navigator made
     steps: [],           // one entry per model turn, for the trace
     result: null,        // { action, targets, match, note? }; note says why code changed or chose it
     startedAt: performance.now()
@@ -36,6 +39,7 @@ function makeState(query, t) {
 // The view every navigator starts from: the top level, plus search(query).
 function startExploring(state) {
   state.searches++;
+  state.done.add(callKey('search', { text: state.query }));
   var journey = null;
   return tools.search(state.query, null, { quiet: true, onJourney: function (j) { journey = j; } })
     .then(function (found) {
@@ -61,9 +65,11 @@ var EXPLORER_PROMPT = [
   'You help a visitor find what they want on ONE web page. You explore the page with tools, then call finish.',
   '',
   'The page is a tree of nodes with ids like n12. Each node summary has its tag (link, button, h2, group, list, record...),',
-  'its text, and "contains": how many nodes are inside it.',
+  'its text, and "contains": how many nodes are inside it. Cards (product records, small titled groups) also show',
+  '"details": the text inside them (prices, figures), so you can often compare them without reading each one.',
   '- expand(id): the children of a node. Use it to go down into a section or list.',
   '- read(id): all text inside a node, with ids. Use it to check details: tables, prices, delivery, product details.',
+  '  It already includes the children, so do not expand a node you have read.',
   '- search(text, within?): ranked matches on the whole page, or only inside node `within`. Results are candidates, not proof.',
   '- finish(action, targets): your final choice.',
   '',
@@ -151,10 +157,50 @@ function explorerStartMessage(state) {
     'search(' + JSON.stringify(state.query) + ') returned:\n' + JSON.stringify(state.start.search);
 }
 
+// Identifies a call for repeat blocking. Searches compare their words (lowercased,
+// stopwords dropped, order ignored), so "Sales this month" repeats "sales this month".
+function callKey(name, args) {
+  if (name === 'search') return 'search ' + words(args.text).sort().join(' ') + ' | ' + (args.within || '');
+  return name + ' ' + (args.id || '');
+}
+
+// The read() that already covers node id, if any: the node itself or an ancestor was read.
+function coveringRead(state, id) {
+  var node = state.tree.byId.get(String(id));
+  for (var n = node; n; n = n.parent) if (state.evidence[n.id] !== undefined) return n.id;
+  return null;
+}
+
+// Every result tells the model how much budget is left.
+function withBudget(state, result) {
+  var out = Object.assign({}, result);
+  out.callsLeft = Math.max(0, MAX_TOOL_CALLS - state.toolCalls);
+  out.searchesLeft = Math.max(0, MAX_SEARCHES - state.searches);
+  return out;
+}
+
 // Runs one tool call. Returns a Promise of the result object sent back to the model.
 function runTool(state, name, args) {
-  var key = name + ' ' + JSON.stringify(args);
-  if (state.done.has(key)) return Promise.resolve({ error: 'You already made this exact call; its result is above.' });
+  return runToolInner(state, name, args).then(function (result) { return withBudget(state, result); });
+}
+
+function runToolInner(state, name, args) {
+  var key = callKey(name, args);
+  if (state.done.has(key)) {
+    return Promise.resolve({ error: name === 'search'
+      ? 'Already searched for these words; the results are above. Search other words, or use expand/read.'
+      : 'You already made this exact call; its result is above.' });
+  }
+  // expand/read inside something already read: answered from memory, free.
+  if ((name === 'expand' || name === 'read') && state.tree.byId.has(String(args.id))) {
+    var covered = coveringRead(state, args.id);
+    if (covered) {
+      state.done.add(key);
+      var cached = name === 'expand' ? tools.expand(args.id) : tools.read(args.id);
+      cached.note = 'Already included in your read of ' + covered + '; this call was free.';
+      return Promise.resolve(cached);
+    }
+  }
   if (state.toolCalls >= MAX_TOOL_CALLS) return Promise.resolve({ error: 'Tool budget used up. Call finish.' });
   if (name === 'search' && state.searches >= MAX_SEARCHES) {
     return Promise.resolve({ error: 'Search limit (' + MAX_SEARCHES + ') reached. Use expand/read, or finish.' });
@@ -174,6 +220,10 @@ function runTool(state, name, args) {
     return tools.search(args.text, args.within, { quiet: true, onJourney: function (j) { journey = j; } })
       .then(function (out) {
         if (journey) state.searchJourneys.push(journey);
+        if (out.results) {
+          state.searchHits.push({ text: args.text, within: args.within || '',
+            ids: out.results.map(function (hit) { return hit.id; }) });
+        }
         return out;
       });
   }
@@ -320,26 +370,20 @@ function checkResult(state) {
 
 var MAX_HANDOFF_CHARS = 3000; // sources are always kept; other read text is cut first
 
-// A node's text for the answer step: the text of its subtree, one line per node,
-// without the tree ids and without lines that repeat the one above (a card's
-// title is usually also its heading).
-function plainText(node) {
-  var lines = [];
-  (function walk(n) {
-    // Own text only: for groups and lists nodeLabel would be a preview of the children.
-    var d = n.data || {};
-    var line = n.title || d.text || d.label || (n.children.length ? '' : d.href || '');
-    if (line && line !== lines[lines.length - 1]) lines.push(line);
-    n.children.forEach(walk);
-  })(node);
-  var text = lines.join('\n'); // labels are already cleaned and PII-redacted by the extractor
-  return text.length > MAX_READ ? text.slice(0, MAX_READ - 1) + '…' : text;
-}
-
 // What the answer step receives: the question, the explorer's decision, and page
-// text only. sources = the targets (cited and highlighted); context = everything
-// else the explorer read with read(), minus what is already inside a source.
-// No tool calls, search lists or model text: every text field is page text.
+// text only (no tool calls, search lists or model text). In order, up to
+// MAX_HANDOFF_CHARS (sources are always kept):
+//   sources  the targets: cited and highlighted
+//   context  1. nodes the explorer read (via "read"), minus text already in a source
+//            2. the top hits of each search the explorer made itself (via "search"),
+//               latest first: these are reworded into the page's terms or scoped to
+//               a section, and often target the part of the question still missing
+//            3. the top hits of the automatic search (via "search"): found by both
+//               rankings first
+//            2 and 3 are the RAG part: high-scoring evidence from branches the
+//            explorer never opened still reaches the answer step. A hit that is
+//            inside, or contains, something already included is skipped, so a
+//            whole section can't crowd out specific nodes.
 function handoff(state) {
   var r = state.result;
   var sources = r.targets.map(function (id) { return state.tree.byId.get(id); });
@@ -351,14 +395,48 @@ function handoff(state) {
     context: []
   };
   if (r.action === 'abstain') return out;
+
+  var included = sources.slice();
   var used = out.sources.reduce(function (n, s) { return n + s.text.length; }, 0);
+  function overlaps(node) {
+    return included.some(function (other) { return isInside(node, other) || isInside(other, node); });
+  }
+  function add(node, via, text) {
+    if (!text || used + text.length > MAX_HANDOFF_CHARS) return;
+    used += text.length;
+    included.push(node);
+    out.context.push({ id: node.id, via: via, path: pathOf(node), text: text });
+  }
+
+  // 1. Read nodes. One that contains a source (e.g. the table around a target row)
+  // keeps its other text: the rows next to the target are often what's needed.
   Object.keys(state.evidence).forEach(function (id) {
     var node = state.tree.byId.get(id);
-    if (!node || sources.some(function (src) { return isInside(node, src); })) return;
-    var text = plainText(node);
-    if (used + text.length > MAX_HANDOFF_CHARS) return;
-    used += text.length;
-    out.context.push({ id: node.id, path: pathOf(node), text: text });
+    if (!node || included.some(function (other) { return isInside(node, other); })) return;
+    add(node, 'read', plainText(node, new Set(included)));
+  });
+
+  // 2. Top hits of the explorer's own searches, latest first.
+  state.searchHits.slice().reverse().forEach(function (search) {
+    var taken = 0;
+    search.ids.forEach(function (id) {
+      var node = state.tree.byId.get(id);
+      if (taken >= HANDOFF_EXPLORER_HITS || !node || overlaps(node)) return;
+      taken++;
+      add(node, 'search', plainText(node));
+    });
+  });
+
+  // 3. Top hits of the automatic search.
+  var hits = ((state.start && state.start.search.results) || []).map(function (hit, rank) {
+    return { node: state.tree.byId.get(hit.id), both: hit.via === 'keyword+meaning', rank: rank };
+  }).filter(function (h) { return h.node; });
+  hits.sort(function (a, b) { return (b.both - a.both) || (a.rank - b.rank); });
+  var added = 0;
+  hits.forEach(function (h) {
+    if (added >= HANDOFF_SEARCH_HITS || overlaps(h.node)) return;
+    added++;
+    add(h.node, 'search', plainText(h.node));
   });
   return out;
 }

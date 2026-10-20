@@ -13,6 +13,7 @@
 //   node tests/run.mjs --runs 5           more runs per case
 //   node tests/run.mjs --site dashboard   one site only
 //   node tests/run.mjs --only "profit"    cases whose question (or id) contains this text
+//   node tests/run.mjs --ids dev-10,dev-20   only these case ids
 //   node tests/run.mjs --gap 10           seconds between one worker's queries (rate limits)
 //   node tests/run.mjs --parallel 2       workers (default: one per API key)
 //   node tests/run.mjs --keys GEMINI_API_KEY_3   only these .env keys (comma-separated names)
@@ -32,6 +33,9 @@
 //   tests/reports/<time>-<set>.md    the readable report (committed: the history of scores)
 //   tests/results/<time>-<set>.json  every run's details (git-ignored: large)
 //   node tests/run.mjs --report tests/results/<file>.json   rebuilds the report of a saved run
+//   node tests/run.mjs --retry-errors tests/results/<file>.json
+//                             reruns only the runs that failed with an error (e.g. a 429)
+//                             and saves a new report with them merged in
 
 import { spawn, execSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
@@ -51,9 +55,11 @@ const RUNS = Number(arg('runs', 3));
 const GAP_S = Number(arg('gap', 10));
 const SITE = arg('site', '');
 const ONLY = arg('only', '').toLowerCase();
+const IDS = arg('ids', '').split(',').filter(Boolean);
 const SET = arg('set', 'dev');
 const CHECK = process.argv.includes('--check');
 const REPORT_FROM = arg('report', '');
+const RETRY_FROM = arg('retry-errors', '');
 
 // GEMINI_API_KEY, GEMINI_API_KEY_2, ... from .env (values never printed).
 function readKeys() {
@@ -157,6 +163,10 @@ const EXPLORE = (q) => `PageLens.explore(${JSON.stringify(q)}).then(function (s)
     // The rest of the hand-off to the answer step: other nodes the explorer read.
     context: s.handoff.context.map(function (c) { return describeNode(s.tree.byId.get(c.id)); }),
     toolCalls: s.toolCalls, turns: s.steps.length, tokens: tokens, ms: s.ms,
+    // True if any search in this run fell back to keywords only (no key, rate limit,
+    // API error): such runs explore with half of search missing.
+    keywordOnly: s.start.search.retrieval !== 'hybrid' ||
+      s.searchJourneys.some(function (j) { return !j.dense || j.dense.status !== 'used'; }),
     handoffChars: s.handoff.sources.concat(s.handoff.context).reduce(function (n, x) { return n + x.text.length; }, 0),
     models: Array.from(new Set(s.steps.map(function (st) { return st.model; }))),
     calls: [].concat.apply([], s.steps.map(function (st) { return st.calls.map(function (c) {
@@ -226,7 +236,10 @@ function allRuns(rows, key) {
 }
 
 // Metrics over a list of { c, r, s } (case, run result, score).
-function metrics(rows) {
+// Rates are over completed runs only: a run that failed with an error (e.g. a 429)
+// says nothing about the explorer, so it's counted separately in `errors`.
+function metrics(all) {
+  const rows = all.filter((x) => !x.r.error);
   const ok = rows.filter((x) => x.s.actionOk);
   const abstained = rows.filter((x) => x.r.action === 'abstain');
   const abstainOk = (c) => c.outcomes.some((o) => o.action === 'abstain');
@@ -249,14 +262,16 @@ function metrics(rows) {
     turns: mean(rows.map((x) => x.r.turns || 0)),
     tokens: mean(rows.map((x) => x.r.tokens || 0)),
     seconds: mean(rows.map((x) => (x.r.ms || 0) / 1000)),
-    errors: rows.filter((x) => x.r.error).length
+    errors: all.length - rows.length,
+    keyword_only: rows.filter((x) => x.r.keywordOnly).length
   };
 }
 
-const METRICS_HEADER = '             runs  answ  all3  succ  acti  reca  prec  ctxr  ab-p  ab-r  calls  tokens  secs  chars';
+const METRICS_HEADER = '             runs  err   kw  answ  all3  succ  acti  reca  prec  ctxr  ab-p  ab-r  calls  tokens  secs  chars';
 function metricsLine(label, m) {
   const f = (x) => (Number.isNaN(x) ? '  - ' : pct(x).padStart(4));
-  return `${label.padEnd(12)} ${String(m.runs).padStart(4)}  ${f(m.answerable)}  ${f(m.all_runs_answerable)}  ${f(m.success)}  ` +
+  const n = (x) => (Number.isNaN(x) ? '-' : String(x));
+  return `${label.padEnd(12)} ${String(m.runs).padStart(4)} ${n(m.errors).padStart(4)} ${n(m.keyword_only).padStart(4)}  ${f(m.answerable)}  ${f(m.all_runs_answerable)}  ${f(m.success)}  ` +
     `${f(m.action_accuracy)}  ${f(m.evidence_recall)}  ${f(m.target_precision)}  ${f(m.context_recall)}  ${f(m.abstain_precision)}  ${f(m.abstain_recall)}  ${m.tool_calls.toFixed(1).padStart(5)}  ` +
     `${Math.round(m.tokens).toString().padStart(6)}  ${m.seconds.toFixed(1).padStart(5)}  ` +
     `${Number.isNaN(m.handoff_chars) ? '    -' : Math.round(m.handoff_chars).toString().padStart(5)}`;
@@ -302,12 +317,16 @@ function reportLines(selected, results) {
     lines.push(metricsLine(type, summary.byType[type]));
   }
   lines.push('',
+    'runs = completed runs (all rates are over these). err = runs that failed with an error (not counted).',
+    'kw = completed runs where search fell back to keywords only (embeddings unavailable).',
     'answ = answerable: right action, and the hand-off (targets + other text given to the answer step) covers all evidence.',
     'all3 = share of questions answerable in every run. succ = right action and the targets alone cover all evidence.',
     'acti = action accuracy. reca / prec = target recall / precision. ctxr = context recall (hand-off).',
     'ab-p / ab-r = abstain precision / recall. Per query: tool calls, tokens, seconds, hand-off characters.',
     '✓ every run answerable, ~ some, ✗ none. In the per-run lines, ~ = answerable but the targets missed evidence.');
-  if (summary.overall.errors) lines.push(`${summary.overall.errors} run(s) failed with an error (counted as failures).`);
+  if (summary.overall.errors) {
+    lines.push(`${summary.overall.errors} run(s) failed with an error and are left out of the rates; rerun them with --retry-errors.`);
+  }
   return { lines, summary };
 }
 
@@ -320,7 +339,7 @@ function saveRun(run) {
   const json = run.jsonFile || join(HERE, 'results', run.stamp + '-' + run.set + '.json');
   if (!run.jsonFile) {
     writeFileSync(json, JSON.stringify({ set: run.setFile, runs: run.runs, started: run.started, commit: run.commit,
-      keys: run.keys, summary, cases: run.selected.map((c, ci) => ({ ...c, runs: run.results[ci] })) }, null, 2));
+      keys: run.keys, summary, cases: run.selected.map(({ saved, ...c }, ci) => ({ ...c, runs: run.results[ci] })) }, null, 2));
   }
   const md = join(HERE, 'reports', run.stamp + '-' + run.set + '.md');
   writeFileSync(md, [
@@ -367,7 +386,7 @@ if (REPORT_FROM) {
 // ---- Main ----
 
 const { file: setFile, sites, cases } = loadSet(SET);
-const selected = cases.filter((c) => (!SITE || c.site === SITE) &&
+const selected = cases.filter((c) => (!SITE || c.site === SITE) && (!IDS.length || IDS.includes(c.id)) &&
   (!ONLY || c.question.toLowerCase().includes(ONLY) || c.id.toLowerCase().includes(ONLY)));
 if (!selected.length) { console.error('No cases match.'); process.exit(1); }
 
@@ -408,12 +427,33 @@ if (CHECK) {
   process.exit(problems ? 1 : 0);
 }
 
-// One job per (case, run), grouped by site so workers rarely reload pages.
-const jobs = [];
-selected.forEach((c, ci) => { for (let k = 0; k < RUNS; k++) jobs.push({ c, ci }); });
-const results = selected.map(() => []);
+// One job per (case, run k), grouped by site so workers rarely reload pages.
+// --retry-errors: the saved run's results, with jobs only for the runs that errored.
+let jobs = [];
+let results;
+let runSet = SET, runSetFile = setFile, runCount = RUNS, retryNote = '';
+if (RETRY_FROM) {
+  const data = JSON.parse(readFileSync(RETRY_FROM, 'utf8'));
+  runSet = /testset/.test(data.set || '') ? 'test' : 'dev';
+  const fresh = loadSet(runSet);
+  runSetFile = fresh.file;
+  runCount = data.runs;
+  selected.length = 0;
+  data.cases.forEach((saved) => {
+    const c = fresh.cases.find((f) => f.question === (saved.question || saved.q));
+    if (c) selected.push(Object.assign(c, { saved }));
+  });
+  results = selected.map((c) => c.saved.runs.map((r) => ({ ...r, score: score({ context: [], ...r }, c) })));
+  selected.forEach((c, ci) => results[ci].forEach((r, k) => { if (r.error) jobs.push({ c, ci, k }); }));
+  retryNote = `retried ${jobs.length} errored run(s) of ${RETRY_FROM.replace(HERE + '/', 'tests/')}`;
+  if (!jobs.length) { console.log('No errored runs in ' + RETRY_FROM); process.exit(0); }
+} else {
+  results = selected.map(() => new Array(RUNS));
+  selected.forEach((c, ci) => { for (let k = 0; k < RUNS; k++) jobs.push({ c, ci, k }); });
+}
 const workers = Math.min(PARALLEL, jobs.length);
-console.log(`${setFile}: ${selected.length} cases × ${RUNS} runs = ${jobs.length} queries, ${workers} worker(s), ~${GAP_S} s apart per worker`);
+console.log(`${runSetFile}: ${RETRY_FROM ? retryNote : selected.length + ' cases × ' + RUNS + ' runs'} = ${jobs.length} queries, ` +
+  `${workers} worker(s), ~${GAP_S} s apart per worker`);
 console.log('Keys: ' + (KEYS.length ? KEYS.map((k) => k.name + ' …' + k.value.slice(-4)).join(', ') : 'none in .env (using the build\'s key)') + '\n');
 
 let done = 0;
@@ -438,7 +478,7 @@ async function worker(w) {
       try { r = await chrome.evaluate(EXPLORE(job.c.question)); } catch (err) { r = { error: err.message }; }
       r.score = score(r, job.c);
       r.worker = w + 1;
-      results[job.ci].push(r);
+      results[job.ci][job.k] = r;
       done++;
       console.log(`  [${String(done).padStart(3)}/${done + jobs.length}] w${w + 1}${key ? ' …' + key.value.slice(-4) : ''} ` +
         `${r.score.success ? '✓' : '✗'} ${job.c.id} ${job.c.question}`);
@@ -451,5 +491,5 @@ async function worker(w) {
 await Promise.all(Array.from({ length: workers }, (_, w) => worker(w)));
 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-saveRun({ set: SET, setFile, runs: RUNS, selected, results, keys: rekeyStats, stamp,
+saveRun({ set: runSet, setFile: runSetFile, runs: runCount, selected, results, keys: rekeyStats, stamp, note: retryNote || undefined,
   commit: gitCommit(), started: new Date().toISOString() });

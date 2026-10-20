@@ -99,7 +99,16 @@ Limits, enforced in code: 8 tool calls (then only `finish` is allowed), 3 search
 
 Targets nested inside another target are dropped (a product card already contains its price).
 
-The answer step (next) gets a **hand-off** built by code, like retrieved chunks in RAG: the question, the action, the targets as `sources` (cited and highlighted), and as `context` the other page text the explorer read with `read()`, minus what's inside a source, capped at 3000 characters. Every text in it is page text: no tool calls, search lists or model-written text. For now the chat reply shows this hand-off; writing the answer and highlighting on the page come next.
+The answer step (next) gets a **hand-off** built by code, like retrieved chunks in RAG. It holds only page text (no tool calls, search lists or model-written text), capped at 3000 characters, in this order:
+
+1. `sources`: the explorer's targets, cited and highlighted.
+2. `context` from what the explorer `read()` (`via: "read"`), minus text already in a source.
+3. `context` from the top 2 hits of each search the explorer made itself (`via: "search"`), latest first: these are reworded into the page's terms or scoped to a section.
+4. `context` from the top 3 hits of the automatic first search (`via: "search"`), hits found by both keyword and meaning first, skipping any that overlap something already included. This keeps high-scoring evidence from branches the explorer never opened, e.g. a second figure elsewhere on the page.
+
+Budget rules: every tool result says how many calls and searches are left; a search with the same words as an earlier one (including the automatic first search) is refused; `expand`/`read` of a node inside one already read is answered from memory for free. Card summaries (product records, small titled groups) include `details`, the text inside them, so prices and figures are visible without reading each card.
+
+For now the chat reply shows the hand-off; writing the answer and highlighting on the page come next.
 
 ## Search
 
@@ -135,4 +144,4 @@ node tests/run.mjs --set test --check
 node tests/run.mjs --site dashboard --runs 5 --only "profit"
 ```
 
-API keys: the runner uses every `GEMINI_API_KEY`, `GEMINI_API_KEY_2`, ... in `.env`, one headless Chrome per key, swapping the key into the page's Gemini requests. Rate limits are per Google Cloud project, so extra keys only help if they have their own quota. Each worker spaces its queries ~10 s apart (`--gap`). Every run saves a readable report to `tests/reports/<time>-<set>.md` (committed, so the history of scores stays in the repo) and every run's details to `tests/results/` (git-ignored). `node tests/run.mjs --report tests/results/<file>.json` rebuilds a report from saved details with the current scoring.
+API keys: the runner uses every `GEMINI_API_KEY`, `GEMINI_API_KEY_2`, ... in `.env`, one headless Chrome per key, swapping the key into the page's Gemini requests. Rate limits are per Google Cloud project, so extra keys only help if they have their own quota. Each worker spaces its queries ~10 s apart (`--gap`). Every run saves a readable report to `tests/reports/<time>-<set>.md` (committed, so the history of scores stays in the repo) and every run's details to `tests/results/` (git-ignored). `node tests/run.mjs --report tests/results/<file>.json` rebuilds a report from saved details with the current scoring. Rates are over completed runs: runs that failed with an error (e.g. a 429 rate limit) are counted separately (`err`), and `node tests/run.mjs --retry-errors tests/results/<file>.json` reruns just those and saves a new report. `kw` counts runs where search fell back to keywords only.

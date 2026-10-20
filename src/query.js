@@ -43,8 +43,10 @@ function handoffLines(h) {
   var lines = ['Sources (cited and highlighted):'];
   h.sources.forEach(function (s) { lines.push('[' + s.id + '] ' + (s.path || '(top level)'), indentText(s.text)); });
   if (h.context.length) {
-    lines.push('Other page text the explorer read:');
-    h.context.forEach(function (s) { lines.push('[' + s.id + '] ' + (s.path || '(top level)'), indentText(s.text)); });
+    lines.push('Other page text (read = the explorer read it, search = a top search hit):');
+    h.context.forEach(function (s) {
+      lines.push('[' + s.id + '] (' + s.via + ') ' + (s.path || '(top level)'), indentText(s.text));
+    });
   }
   return lines;
 }
