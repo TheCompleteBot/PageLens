@@ -1,0 +1,69 @@
+# Builds PageLens with the key from the PAGELENS_GEMINI_KEY repository secret and
+# publishes it to GitHub Pages, without the built file ever entering the repo:
+#   https://<user>.github.io/PageLens/lib.js         the library
+#   https://<user>.github.io/PageLens/demo/          the demo store, using it
+#
+# One-time setup on GitHub:
+#   Settings → Secrets and variables → Actions → New repository secret: PAGELENS_GEMINI_KEY
+#   Settings → Pages → Source: GitHub Actions
+#
+# The published lib.js contains the key (anyone who loads it can read it), so use a
+# dedicated key with a daily request quota.
+
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build lib.js with the key
+        env:
+          PAGELENS_GEMINI_KEY: ${{ secrets.PAGELENS_GEMINI_KEY }}
+        run: |
+          if [ -z "$PAGELENS_GEMINI_KEY" ]; then
+            echo "::error::Add the PAGELENS_GEMINI_KEY repository secret (Settings → Secrets and variables → Actions)."
+            exit 1
+          fi
+          printf 'PAGELENS_GEMINI_KEY=%s\n' "$PAGELENS_GEMINI_KEY" > .env
+          node build.js --key PAGELENS_GEMINI_KEY
+          rm .env
+
+      - name: Assemble the site
+        run: |
+          mkdir -p site/demo
+          cp dist/lib.js site/lib.js
+          # The demo loads the library from the site root.
+          sed 's#src="/dist/lib.js"#src="../lib.js"#' demo/index.html > site/demo/index.html
+          grep -q 'src="../lib.js"' site/demo/index.html
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

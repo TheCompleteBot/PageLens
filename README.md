@@ -24,6 +24,15 @@ node build.js --key GEMINI_API_KEY      # writes dist/lib.js with the key baked 
 
 **The key is visible to anyone who loads the page** (it is inside `lib.js`), so use a key with a low spending limit or a request quota, never one with access to anything else. Fine for a prototype, not for production. Don't commit `dist/`: it contains the key.
 
+### Or use the hosted version
+
+A copy built with the project owner's key is published on GitHub Pages, for people they share it with:
+
+- Library: `https://thecompletebot.github.io/PageLens/lib.js`
+- Live demo: `https://thecompletebot.github.io/PageLens/demo/`
+
+Use it like a local copy, with `src="https://thecompletebot.github.io/PageLens/lib.js"` in the start tag (step 2). It is rebuilt and redeployed on every push to `main` by `.github/workflows/deploy.yml`, which takes the key from the repository secret `PAGELENS_GEMINI_KEY`; the built file never enters the repo. To set it up on a fork: add that secret (Settings → Secrets and variables → Actions) and set Settings → Pages → Source to **GitHub Actions**. The hosted `lib.js` contains the key, so use a dedicated key with a daily request quota, and share the link only with people you trust.
+
 ### 2. Mark the part of the page the assistant may use
 
 Put the start tag where the assistant's region begins and the end tag where it ends. PageLens only reads, and only points to, what is between them; anything outside (e.g. a header or footer) is ignored. These two tags are the only change to your page.
@@ -93,11 +102,11 @@ The visitor's question and the visible text of your marked region (as a compact 
 - **Infinite scroll and lazy-loaded content** (not yet loaded) can't be read. Out of scope for now.
 - **Guide only:** it highlights and scrolls; it never clicks, types, fills forms or navigates. It only knows the current page.
 - **Text only:** no images, and no values drawn in charts (only a chart's labels).
-- **English only.** Gemini is the only provider. A question takes about 5–15 s (2–4 LLM calls); free-tier keys are rate-limited.
+- **English only.** Gemini is the only provider. A question takes about 5–15 s (3–5 LLM calls: 2–4 for the explorer, 1 for the answer); free-tier keys are rate-limited.
 - Long paragraphs are cut at about 200 characters in the page tree, so facts at the end of long text can be missed.
-- The API key is public (see step 1).
+- **The API key is public.** It is written into `lib.js` (open the file, or DevTools → Sources) and sent with every request (DevTools → Network, the `x-goog-api-key` header), so anyone visiting the page can copy it. Only a backend that holds the key and forwards the requests would hide it; until then, use a key with a low spending limit or a daily request quota.
 
-Measured accuracy (see Testing below and `tests/reports/`): 94% of replies correct on our 60-question test set; 90% on three open-source sites never used for development (94% if replies that were right but worded differently from the reference are counted), measured after scrolling the page; 0 of 12 before scrolling, because of the first limitation.
+Measured accuracy (see Testing below and `tests/reports/`, latest full runs): 93% of replies correct on our 60-question test set, and 94% on three open-source sites never used for development, measured after scrolling the page; 0 of 12 before scrolling, because of the first limitation.
 
 ## Developing PageLens
 
