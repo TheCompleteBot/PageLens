@@ -4,8 +4,8 @@
 if (!startMarker) {
   console.error(LOG_PREFIX, 'Could not find the start <script data-start> tag. PageLens is disabled.');
 } else {
-  if (!config.apiKey) {
-    console.warn(LOG_PREFIX, 'This build has no API key, so queries will fail. Add the key to .env and run node build.js --key NAME.');
+  if (!hasApiAccess()) {
+    console.warn(LOG_PREFIX, 'This build has no API key or proxy, so queries will fail. Run node build.js --key NAME (key in .env) or --proxy URL.');
   }
   // Small debugging surface. The API key is deliberately not exposed here.
   window.PageLens = {

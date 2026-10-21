@@ -17,3 +17,7 @@ tests/results/
 
 # Working notes (not committed)
 docs/
+
+# Local secrets for the proxy (wrangler dev)
+proxy/.dev.vars
+proxy/.wrangler/

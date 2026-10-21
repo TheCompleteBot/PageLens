@@ -4,12 +4,15 @@
 //
 //   node build.js                        build once, with the key in .env's GEMINI_API_KEY
 //   node build.js --key GEMINI_API_KEY_3 use another .env variable as the key
+//   node build.js --proxy https://pagelens-proxy.example.workers.dev
+//                                        no key in lib.js: Gemini requests go to that proxy
+//                                        (proxy/worker.js), which adds the key on the server
 //   node build.js --watch                rebuild whenever a file in src/ (or .env) changes
 //
-// API key: the Gemini key is read from .env (git-ignored) and baked into
-// dist/lib.js; this is the only way PageLens gets its key. dist/ is git-ignored
-// because it contains the key, and anyone who loads the page can read it, so use a
-// key with a low spending limit or a request quota.
+// API key: with --key (or the default), the Gemini key is read from .env
+// (git-ignored) and baked into dist/lib.js. dist/ is git-ignored because it contains
+// the key, and anyone who loads the page can read it, so use a key with a low
+// spending limit or a request quota. For anything public, use --proxy instead.
 
 'use strict';
 
@@ -23,6 +26,13 @@ var FILES = ['init.js', 'extract.js', 'tree.js', 'gemini.js', 'search.js', 'trac
 var SRC = path.join(__dirname, 'src');
 var OUT = path.join(__dirname, 'dist', 'lib.js');
 var ENV = path.join(__dirname, '.env');
+var GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com';
+var proxyFlag = process.argv.indexOf('--proxy');
+var PROXY_URL = proxyFlag === -1 ? '' : String(process.argv[proxyFlag + 1] || '').replace(/\/+$/, '');
+if (proxyFlag !== -1 && !/^https?:\/\/[^\s]+$/.test(PROXY_URL)) {
+  console.error('--proxy needs the proxy\'s URL, e.g. --proxy https://pagelens-proxy.example.workers.dev');
+  process.exit(1);
+}
 var keyFlag = process.argv.indexOf('--key');
 var KEY_NAME = keyFlag === -1 ? 'GEMINI_API_KEY' : process.argv[keyFlag + 1];
 if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(KEY_NAME || '')) {
@@ -73,16 +83,21 @@ function build() {
     var code = fs.readFileSync(path.join(SRC, name), 'utf8').replace(/\s+$/, '');
     return indent('// ---- src/' + name + ' ----\n\n' + code);
   });
-  var key = readKey();
-  // Defined before src/init.js, which reads it.
-  var keyLine = indent('// Gemini API key, from .env (' + KEY_NAME + ') at build time.\n' +
-    'var API_KEY = ' + JSON.stringify(key) + ';');
+  var key = PROXY_URL ? '' : readKey();
+  // Defined before src/init.js, which reads them.
+  var keyLine = indent((PROXY_URL
+    ? '// No API key: requests go to the PageLens proxy, which adds it on the server.\n'
+    : '// Gemini API key, from .env (' + KEY_NAME + ') at build time.\n') +
+    'var API_KEY = ' + JSON.stringify(key) + ';\n' +
+    'var API_PROXY = ' + JSON.stringify(PROXY_URL) + ';\n' +
+    'var API_BASE = ' + JSON.stringify((PROXY_URL || GEMINI_BASE_URL) + '/v1beta/models/') + ';');
   var output = BANNER + '\n(function () {\n  \'use strict\';\n\n' + keyLine + '\n\n' +
     parts.join('\n\n') + '\n})();\n';
   fs.mkdirSync(path.dirname(OUT), { recursive: true });
   fs.writeFileSync(OUT, output);
   // Only the last 4 characters, so the key never ends up in a terminal log.
-  var keyNote = key ? 'key ' + KEY_NAME + ' …' + key.slice(-4) : 'NO API KEY: queries will fail';
+  var keyNote = PROXY_URL ? 'no key, proxy ' + PROXY_URL
+    : key ? 'key ' + KEY_NAME + ' …' + key.slice(-4) : 'NO API KEY: queries will fail';
   console.log('Built ' + path.relative(__dirname, OUT) + ' (' + output.length + ' bytes, ' + keyNote + ') at ' +
     new Date().toLocaleTimeString());
 }

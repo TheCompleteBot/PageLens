@@ -13,8 +13,11 @@ var startMarker = document.currentScript || document.querySelector(START_SELECTO
 
 // Read from the start tag's data-* attributes. main.js stops if there is no start tag.
 var config = {
-  // Set by build.js from .env (node build.js --key NAME).
+  // Set by build.js: the key from .env (node build.js --key NAME), or none and the
+  // proxy's address (node build.js --proxy URL). apiBase is where requests go.
   apiKey: API_KEY,
+  proxy: API_PROXY,
+  apiBase: API_BASE,
   provider: ((startMarker && startMarker.getAttribute('data-provider')) || 'gemini').toLowerCase(),
   // The model the explorer uses (see gemini.js), and how it picks targets:
   // 'llm' (explore with tools) or 'search' (top search hit, no LLM; a baseline).

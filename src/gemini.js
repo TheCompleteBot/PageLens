@@ -3,7 +3,6 @@
 // Docs: https://ai.google.dev/gemini-api/docs/embeddings
 //       https://ai.google.dev/gemini-api/docs/function-calling
 
-var GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/';
 var EMBEDDING_MODEL = 'gemini-embedding-001'; // text-only; supports RETRIEVAL_* task types
 var EMBEDDING_DIMENSIONS = 768;              // one of the recommended sizes (768 / 1536 / 3072)
 var EMBEDDING_BATCH = 100;                   // texts per batchEmbedContents request
@@ -30,9 +29,14 @@ var GENERATE_TRIES = 3;    // per model, before switching to the fallback model
 var EMBEDDING_TRIES = 2;   // search falls back to keywords, so don't make it wait long
 var BATCH_GAP_MS = [100, 400]; // random pause between embedding batches
 
-// True when this provider can produce embeddings with the configured key.
+// True when requests can be made: with a key, or through the proxy (which has it).
+function hasApiAccess() {
+  return !!(config.apiKey || config.proxy);
+}
+
+// True when this provider can produce embeddings with the configured key or proxy.
 function canEmbed() {
-  return config.provider === 'gemini' && !!config.apiKey;
+  return config.provider === 'gemini' && hasApiAccess();
 }
 
 function wait(ms) {
@@ -57,9 +61,12 @@ function serverRetryDelay(detail) {
 function geminiPost(model, method, body, tries) {
   tries = tries || 1;
   function attempt(k) {
-    return fetch(GEMINI_BASE + model + ':' + method, {
+    // Through the proxy, no key is sent: it adds the key on the server.
+    var headers = { 'Content-Type': 'application/json' };
+    if (config.apiKey) headers['x-goog-api-key'] = config.apiKey;
+    return fetch(config.apiBase + model + ':' + method, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': config.apiKey },
+      headers: headers,
       body: JSON.stringify(body)
     }).then(function (res) {
       if (res.ok) return res.json();

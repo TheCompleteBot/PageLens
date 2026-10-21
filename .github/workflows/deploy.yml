@@ -1,15 +1,16 @@
-# Builds PageLens with the key from the PAGELENS_GEMINI_KEY repository secret and
-# publishes it to GitHub Pages, without the built file ever entering the repo:
+# Builds PageLens and publishes it to GitHub Pages, without the built file ever
+# entering the repo. lib.js calls the PageLens proxy (no key in it) when the
+# PAGELENS_PROXY_URL repository variable is set (see proxy/README.md); otherwise the
+# key from the PAGELENS_GEMINI_KEY secret is baked in:
 #   https://<user>.github.io/PageLens/lib.js         the library
 #   https://<user>.github.io/PageLens/demo/          the demo store, using it
 #   https://<user>.github.io/PageLens/dashboard/     the example admin dashboard (examples/shadcn-admin)
 #
 # One-time setup on GitHub:
-#   Settings → Secrets and variables → Actions → New repository secret: PAGELENS_GEMINI_KEY
+#   Settings → Secrets and variables → Actions → Variables: PAGELENS_PROXY_URL (recommended),
+#     or Secrets: PAGELENS_GEMINI_KEY (the published lib.js then contains the key,
+#     and anyone who loads it can read it: use a dedicated key with a daily quota)
 #   Settings → Pages → Source: GitHub Actions
-#
-# The published lib.js contains the key (anyone who loads it can read it), so use a
-# dedicated key with a daily request quota.
 
 name: Deploy to GitHub Pages
 
@@ -40,12 +41,20 @@ jobs:
         with:
           node-version: 22
 
-      - name: Build lib.js with the key
+      # With the PAGELENS_PROXY_URL repository variable set (see proxy/README.md),
+      # lib.js has no key and calls the proxy; otherwise the key is baked in.
+      - name: Build lib.js
         env:
+          PAGELENS_PROXY_URL: ${{ vars.PAGELENS_PROXY_URL }}
           PAGELENS_GEMINI_KEY: ${{ secrets.PAGELENS_GEMINI_KEY }}
         run: |
+          if [ -n "$PAGELENS_PROXY_URL" ]; then
+            node build.js --proxy "$PAGELENS_PROXY_URL"
+            if grep -qE 'AIza[0-9A-Za-z_-]{20,}' dist/lib.js; then echo "::error::lib.js contains a key"; exit 1; fi
+            exit 0
+          fi
           if [ -z "$PAGELENS_GEMINI_KEY" ]; then
-            echo "::error::Add the PAGELENS_GEMINI_KEY repository secret (Settings → Secrets and variables → Actions)."
+            echo "::error::Set the PAGELENS_PROXY_URL variable, or add the PAGELENS_GEMINI_KEY secret (Settings → Secrets and variables → Actions)."
             exit 1
           fi
           printf 'PAGELENS_GEMINI_KEY=%s\n' "$PAGELENS_GEMINI_KEY" > .env

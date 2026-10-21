@@ -197,7 +197,7 @@ function denseRank(docs, query) {
 
 function denseStatus() {
   if (config.provider !== 'gemini') return 'provider "' + config.provider + '" has no embeddings';
-  if (!config.apiKey) return 'no API key';
+  if (!hasApiAccess()) return 'no API key';
   if (denseDisabled) return denseDisabled;
   if (Date.now() < densePausedUntil) return 'rate limited, retrying in ' + Math.ceil((densePausedUntil - Date.now()) / 1000) + ' s';
   return '';

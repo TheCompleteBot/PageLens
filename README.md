@@ -24,6 +24,8 @@ node build.js --key GEMINI_API_KEY      # writes dist/lib.js with the key baked 
 
 **The key is visible to anyone who loads the page** (it is inside `lib.js`), so use a key with a low spending limit or a request quota, never one with access to anything else. Fine for a prototype, not for production. Don't commit `dist/`: it contains the key.
 
+**To keep the key off the page**, run the small proxy in [`proxy/`](proxy/README.md) (a Cloudflare Worker, free plan) and build with `node build.js --proxy https://pagelens-proxy.<you>.workers.dev` instead of `--key`: `lib.js` then contains no key, and its Gemini requests go to the proxy, which accepts only your sites and PageLens's own calls, rate-limits each visitor, and adds the key on the server.
+
 ### Or use the hosted version
 
 A copy built with the project owner's key is published on GitHub Pages, for people they share it with:
@@ -32,7 +34,7 @@ A copy built with the project owner's key is published on GitHub Pages, for peop
 - Live demo: `https://thecompletebot.github.io/PageLens/demo/`
 - Live example dashboard: `https://thecompletebot.github.io/PageLens/dashboard/`
 
-Use it like a local copy, with `src="https://thecompletebot.github.io/PageLens/lib.js"` in the start tag (step 2). It is rebuilt and redeployed on every push to `main` by `.github/workflows/deploy.yml`, which takes the key from the repository secret `PAGELENS_GEMINI_KEY`; the built file never enters the repo. To set it up on a fork: add that secret (Settings → Secrets and variables → Actions) and set Settings → Pages → Source to **GitHub Actions**. The hosted `lib.js` contains the key, so use a dedicated key with a daily request quota, and share the link only with people you trust.
+Use it like a local copy, with `src="https://thecompletebot.github.io/PageLens/lib.js"` in the start tag (step 2). It is rebuilt and redeployed on every push to `main` by `.github/workflows/deploy.yml`; the built file never enters the repo. With the repository variable `PAGELENS_PROXY_URL` set, it is built against the proxy (no key in it); otherwise it takes the key from the repository secret `PAGELENS_GEMINI_KEY`. To set it up on a fork: add one of the two (Settings → Secrets and variables → Actions) and set Settings → Pages → Source to **GitHub Actions**. Built with the key, the hosted `lib.js` contains it, so use a dedicated key with a daily request quota, and share the link only with people you trust.
 
 ### 2. Mark the part of the page the assistant may use
 
@@ -105,7 +107,7 @@ The visitor's question and the visible text of your marked region (as a compact 
 - **Text only:** no images, and no values drawn in charts (only a chart's labels).
 - **English only.** Gemini is the only provider. A question takes about 5–15 s (4–6 LLM calls: 2–4 for the explorer, 1 for the answer, 1 for the guardrail); free-tier keys are rate-limited.
 - Long paragraphs are cut at about 200 characters in the page tree, so facts at the end of long text can be missed.
-- **The API key is public.** It is written into `lib.js` (open the file, or DevTools → Sources) and sent with every request (DevTools → Network, the `x-goog-api-key` header), so anyone visiting the page can copy it. Only a backend that holds the key and forwards the requests would hide it; until then, use a key with a low spending limit or a daily request quota.
+- **With `--key`, the API key is public.** It is written into `lib.js` (open the file, or DevTools → Sources) and sent with every request (DevTools → Network, the `x-goog-api-key` header), so anyone visiting the page can copy it. Use a key with a low spending limit or a daily request quota, or build with `--proxy` ([`proxy/`](proxy/README.md)), which keeps the key on the server. The proxy itself is public: a script can fake an allowed site's `Origin`, so its per-visitor rate limit, call allowlist and the key's own quota are what bound such use.
 
 Measured accuracy (see Testing below and `tests/reports/`, latest full runs): 93% of replies correct on our 60-question test set, and 94% on three open-source sites never used for development, measured after scrolling the page; 0 of 12 before scrolling, because of the first limitation.
 

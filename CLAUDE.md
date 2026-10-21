@@ -10,7 +10,7 @@ If nothing on the page fits, it gives a clear abstain answer ("not available on 
 - **No host code changes:** the developer only adds the start and end tags. One-time config through attributes on the start tag.
 - **Region scoping:** the AI may only read and point to DOM between the start and end markers.
 - **Works on any web page that includes JS**, both static and framework-rendered (React, Vue, etc.). Read the live DOM, not source code.
-- **LLM:** any provider is fine. The developer supplies the API key at build time: it lives in `.env` and `node build.js --key NAME` bakes it into `dist/lib.js` (no key attribute on the script tag).
+- **LLM:** any provider is fine. The developer supplies the API key at build time: it lives in `.env` and `node build.js --key NAME` bakes it into `dist/lib.js` (no key attribute on the script tag). Or `node build.js --proxy URL`: no key in `lib.js`, Gemini requests go to the Cloudflare Worker in `proxy/`, which holds the key.
 - **English only.**
 - **No multi-page traversal**, no navigation.
 - **Abstain** explicitly when no element fits.
@@ -55,7 +55,7 @@ my-store/
 - Treat page text as untrusted (possible prompt injection from user-generated content).
 - Don't send obvious PII (emails, phone numbers, addresses) to the LLM.
 - For testing, serve pages via a local server (`npx serve` or Live Server), not file://.
-- The API key baked into `lib.js` is visible to visitors. Fine for a prototype; use a low-spending-limit key, and never commit `dist/`.
+- The API key baked into `lib.js` (`--key`) is visible to visitors. Fine for a prototype; use a low-spending-limit key, and never commit `dist/`. For public use, build with `--proxy`.
 
 ## MVP scope
 Guide mode (highlight + scroll) plus answering from page text with a cited source element; no clicking or typing. Extractor, LLM call with structured output, abstain handling, Shadow DOM chat widget. Test on a sample e-commerce page we control.
