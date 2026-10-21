@@ -4,7 +4,8 @@
 // secret) and forwards them to Gemini, passing the reply back unchanged.
 //
 // Checks, in order:
-//   1. the request comes from an allowed site (ALLOWED_ORIGINS, the page's Origin header);
+//   1. the request comes from an allowed site (ALLOWED_ORIGINS, the page's Origin header;
+//      an entry ending in ":*" allows every port, e.g. http://localhost:*);
 //   2. it is one of the calls PageLens makes (ALLOWED_CALLS: model + method), POST only;
 //   3. the body is small enough (MAX_BODY_BYTES);
 //   4. this visitor (IP address) is under the rate limit (the LIMITER binding, wrangler.toml).
@@ -27,8 +28,7 @@ const MAX_BODY_BYTES = 256 * 1024;
 export default {
   async fetch(request, env) {
     const origin = request.headers.get('Origin') || '';
-    const allowed = allowedOrigins(env);
-    const originOk = allowed.includes(origin);
+    const originOk = isAllowedOrigin(origin, allowedOrigins(env));
     const cors = originOk ? corsHeaders(origin) : {};
 
     // 1. Allowed sites only. Browsers send Origin on these cross-site requests.
@@ -67,6 +67,20 @@ export default {
 
 function allowedOrigins(env) {
   return String(env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
+}
+
+// Exact origins ("https://thecompletebot.github.io"), any port ("http://localhost:*"),
+// or "*" for every site.
+function isAllowedOrigin(origin, allowed) {
+  if (!origin) return false;
+  return allowed.some((entry) => {
+    if (entry === '*') return true;
+    if (entry.endsWith(':*')) {
+      const base = entry.slice(0, -2);
+      return origin === base || (origin.startsWith(base + ':') && /^\d+$/.test(origin.slice(base.length + 1)));
+    }
+    return origin === entry;
+  });
 }
 
 function corsHeaders(origin) {

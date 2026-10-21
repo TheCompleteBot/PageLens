@@ -4,8 +4,11 @@ main = "worker.js"
 compatibility_date = "2025-09-01"
 
 [vars]
-# Sites whose pages may use the proxy (exact origins, comma-separated).
-ALLOWED_ORIGINS = "https://thecompletebot.github.io,http://localhost:3000,http://localhost:5174"
+# Sites whose pages may use the proxy, comma-separated: exact origins, ":*" for any
+# port (every local dev server), or "*" for every site (then only the rate limit
+# and the key's quota protect it). Add a developer's deployed site as its origin,
+# e.g. https://their-shop.com, and run npx wrangler@4 deploy again.
+ALLOWED_ORIGINS = "https://thecompletebot.github.io,http://localhost:*,https://localhost:*,http://127.0.0.1:*"
 
 # Per-visitor rate limit: 60 Gemini calls a minute per IP (one question makes about 6-10).
 [[ratelimits]]
