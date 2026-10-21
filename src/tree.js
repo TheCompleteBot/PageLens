@@ -8,6 +8,8 @@ var MAX_SEARCH = 8;     // Results returned by one search().
 var MAX_PREVIEW = 60;   // Characters in a group's preview label.
 var MIN_RECORDS = 3;    // Repeated siblings needed to form a list of records.
 var MAX_DETAILS = 100;  // Characters of a card's inner text shown in its summary.
+var MAX_ACTIONS = 6;    // Buttons and links listed in a card's summary.
+var MAX_ACTION_TEXT = 40;
 
 // The latest tree: { roots: [node], byId: Map(id -> node), seen: Set(id) }.
 // node = { id, el, kind, data, title, children: [node], parent, depth }, where kind is
@@ -276,9 +278,35 @@ function cardDetails(node) {
   return inner ? clean(inner, MAX_DETAILS) : '';
 }
 
+// The buttons and links inside a card, in page order, as [{ id, text }], so they
+// stay visible (and targetable) even when the card's text is cut. Ones that every
+// card of the same list has (e.g. "Add to cart") are left out: they say nothing
+// about this card.
+function cardActions(node) {
+  function inside(card) {
+    var out = [];
+    (function walk(n) {
+      n.children.forEach(function (child) {
+        if (isInteractiveNode(child)) out.push(child);
+        walk(child);
+      });
+    })(card);
+    return out;
+  }
+  var label = function (n) { return clean(nodeLabel(n), MAX_ACTION_TEXT); };
+  var siblings = node.parent && node.parent.kind === 'list' ? node.parent.children : [];
+  var everywhere = siblings.length >= 2 ? function (text) {
+    return siblings.every(function (sib) { return inside(sib).some(function (n) { return label(n) === text; }); });
+  } : function () { return false; };
+  return inside(node).map(function (n) { return { id: n.id, text: label(n) }; })
+    .filter(function (a) { return a.text && !everywhere(a.text); });
+}
+
 // One-line description of a node, as the AI sees it. section/near are left out:
 // the tree position already says where a node is. Cards (product records, small
-// titled groups) also get `details`: the text inside them.
+// titled groups) also get `details` (the text inside them, cut short) and `actions`
+// (the buttons and links inside them, with ids). Shown action ids count as seen,
+// so the explorer may target them without expanding the card.
 function summarize(node) {
   var s = { id: node.id, tag: nodeTag(node) };
   var text = nodeLabel(node);
@@ -291,6 +319,12 @@ function summarize(node) {
   if (node.children.length && isCard(node)) {
     var details = cardDetails(node);
     if (details) s.details = details;
+    var actions = cardActions(node);
+    if (actions.length) {
+      s.actions = actions.slice(0, MAX_ACTIONS);
+      if (actions.length > MAX_ACTIONS) s.moreActions = actions.length - MAX_ACTIONS;
+      if (tree) s.actions.forEach(function (a) { tree.seen.add(a.id); });
+    }
   }
   var below = countDescendants(node);
   if (below) s.contains = below;
