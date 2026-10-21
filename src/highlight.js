@@ -1,4 +1,7 @@
 // Step 5 — Execute: scrolls to and highlights the elements the reply cites.
+// Highlights fade out after HIGHLIGHT_VISIBLE_MS, or at once when the visitor clicks
+// anywhere on the page (clicks inside the PageLens chat don't count, so its
+// highlight buttons can bring one back).
 // Only draws boxes over the page: the host page's DOM and styles are never changed.
 // The boxes live in their own Shadow DOM layer, marked with WIDGET_ATTR so the
 // extractor ignores it.
@@ -7,7 +10,8 @@ var HIGHLIGHT_CSS = [
   ':host { all: initial; }',
   '.box { position: fixed; z-index: 2147483645; pointer-events: none; box-sizing: border-box;',
   '  border: 3px solid #f59e0b; border-radius: 6px; background: rgba(245,158,11,.12);',
-  '  box-shadow: 0 0 0 4px rgba(245,158,11,.25); transition: opacity .2s; }',
+  '  box-shadow: 0 0 0 4px rgba(245,158,11,.25); transition: opacity .6s; }',
+  '.box.gone { opacity: 0; }',
   '.box.flash { animation: flash 1s ease-out 2; }',
   '@keyframes flash { 50% { box-shadow: 0 0 0 10px rgba(245,158,11,.45); } }',
   '.badge { position: absolute; top: -12px; left: -12px; min-width: 22px; height: 22px; padding: 0 5px;',
@@ -15,7 +19,10 @@ var HIGHLIGHT_CSS = [
   '  text-align: center; box-sizing: border-box; }'
 ].join('\n');
 
+var HIGHLIGHT_VISIBLE_MS = 5000;
+
 var highlightLayer = null; // { root, boxes: [{ el, box }] }
+var fadeTimer = null;
 
 function ensureHighlightLayer() {
   if (highlightLayer && highlightLayer.host.isConnected) return highlightLayer;
@@ -33,6 +40,11 @@ function ensureHighlightLayer() {
   }
   window.addEventListener('scroll', update, true);
   window.addEventListener('resize', update);
+  // A click on the page (not on PageLens itself) dismisses the highlights.
+  document.addEventListener('pointerdown', function (event) {
+    var inside = event.composedPath().some(function (el) { return el.hasAttribute && el.hasAttribute(WIDGET_ATTR); });
+    if (!inside) fadeHighlights();
+  }, true);
   return highlightLayer;
 }
 
@@ -50,7 +62,19 @@ function placeBoxes() {
   });
 }
 
+function fadeHighlights() {
+  clearTimeout(fadeTimer);
+  if (highlightLayer) highlightLayer.boxes.forEach(function (b) { b.box.classList.add('gone'); });
+}
+
+// Starts (or restarts) the countdown after which the highlights fade.
+function scheduleFade() {
+  clearTimeout(fadeTimer);
+  fadeTimer = setTimeout(fadeHighlights, HIGHLIGHT_VISIBLE_MS);
+}
+
 function clearHighlights() {
+  clearTimeout(fadeTimer);
   if (!highlightLayer) return;
   highlightLayer.boxes.forEach(function (b) { b.box.remove(); });
   highlightLayer.boxes = [];
@@ -83,6 +107,8 @@ function focusHighlight(n) {
   if (!highlightLayer) return;
   var b = highlightLayer.boxes.filter(function (x) { return x.n === n; })[0];
   if (!b || !b.el.isConnected) return;
+  b.box.classList.remove('gone');
+  scheduleFade();
   b.el.scrollIntoView({ block: 'center', behavior: 'smooth' });
   b.box.classList.remove('flash');
   void b.box.offsetWidth; // restart the animation

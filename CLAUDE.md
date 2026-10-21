@@ -10,7 +10,7 @@ If nothing on the page fits, it gives a clear abstain answer ("not available on 
 - **No host code changes:** the developer only adds the start and end tags. One-time config through attributes on the start tag.
 - **Region scoping:** the AI may only read and point to DOM between the start and end markers.
 - **Works on any web page that includes JS**, both static and framework-rendered (React, Vue, etc.). Read the live DOM, not source code.
-- **LLM:** any provider is fine. The developer supplies the API key via the script tag.
+- **LLM:** any provider is fine. The developer supplies the API key at build time: it lives in `.env` and `node build.js --key NAME` bakes it into `dist/lib.js` (no key attribute on the script tag).
 - **English only.**
 - **No multi-page traversal**, no navigation.
 - **Abstain** explicitly when no element fits.
@@ -31,7 +31,6 @@ my-store/
   <!-- AI region starts -->
   <script src="js/lib.js"
           data-start
-          data-api-key="DEVELOPER_API_KEY"
           data-provider="openai"></script>
 
   <nav>Electronics | Fashion | Home</nav>
@@ -45,7 +44,7 @@ my-store/
 ```
 
 ## Architecture
-1. **Init:** on load, find the start script tag (`document.currentScript`), read config from its `data-*` attributes, find the end marker. Remember the common parent container as a fallback in case a framework re-render removes the markers.
+1. **Init:** on load, find the start script tag (`document.currentScript`), read config from its `data-*` attributes (the API key comes from the build), find the end marker. Remember the common parent container as a fallback in case a framework re-render removes the markers.
 2. **Extract (most important part):** build a compact "action map" of elements in the region: visible, interactive, or landmark elements (links, buttons, inputs, nav, headings), plus content blocks (paragraphs, prices, list items, table rows as `cell | cell`) so questions can be answered from page text. For each: short ID, text, aria-label, href, role, nearest section heading. Skip the library's own widget. Re-extract on each query, since the DOM may have changed.
 3. **Decide:** an explorer LLM walks the region as a tree using read-only tools (`expand(id)`, `read(id)`, `search(text)`; search is hybrid: BM25F + Gemini embeddings fused with RRF, keyword-only without a key), starting from the top level, with a max tool-call count and max depth, then calls `finish`. Tools never change the page and every ID is inside the region. `finish` takes structured output with node IDs only, no free text: `{"action": "highlight", "targets": ["el_42"]}`, `{"action": "answer", "targets": ["el_42"]}` (the targets' text holds the answer) or `{"action": "abstain"}`. Code limits the budget (8 tool calls, then finish only) and checks every target was shown to the explorer. The navigator is swappable (`data-navigator`: `llm`, `search`; Jev later). Code then builds a hand-off for the answer LLM, RAG-style: the targets as sources, plus as context the other page text the explorer read and the top hits of the automatic search (page text only, capped), and the answer LLM turns it into the chat reply with citations (id + exact quote), which code checks (ids in the hand-off, quotes found, numbers quoted or computed from quotes; one retry). The highlights are the cited elements, not the explorer's targets.
 4. **Execute:** scroll to the target, highlight it, and show the reason in the chat. Only run actions from an allowlist; never execute free-form model output.
@@ -56,7 +55,7 @@ my-store/
 - Treat page text as untrusted (possible prompt injection from user-generated content).
 - Don't send obvious PII (emails, phone numbers, addresses) to the LLM.
 - For testing, serve pages via a local server (`npx serve` or Live Server), not file://.
-- The API key in the script tag is visible to visitors. Fine for a prototype; use a low-spending-limit key.
+- The API key baked into `lib.js` is visible to visitors. Fine for a prototype; use a low-spending-limit key, and never commit `dist/`.
 
 ## MVP scope
 Guide mode (highlight + scroll) plus answering from page text with a cited source element; no clicking or typing. Extractor, LLM call with structured output, abstain handling, Shadow DOM chat widget. Test on a sample e-commerce page we control.

@@ -4,17 +4,25 @@ A plain-JS library that adds a chat assistant to a web page. A visitor types a q
 
 ## Using PageLens on your site
 
-### 1. Get the library and a key
+### 1. Build the library with your key
+
+Get a Gemini API key from [Google AI Studio](https://aistudio.google.com/apikey) and put it in a `.env` file at the project root (git-ignored), under any variable name:
+
+```
+GEMINI_API_KEY=your-key-here
+```
+
+Then build, naming that variable:
 
 ```sh
 git clone https://github.com/TheCompleteBot/PageLens.git
 cd PageLens
-node build.js --release        # writes dist/lib.js (no API key baked in)
+node build.js --key GEMINI_API_KEY      # writes dist/lib.js with the key baked in
 ```
 
-Copy `dist/lib.js` into your site's static files (e.g. `public/pagelens/lib.js`). You also need a Gemini API key from [Google AI Studio](https://aistudio.google.com/apikey).
+`--key` defaults to `GEMINI_API_KEY`. The build prints only the key's last 4 characters, and warns (listing the variable names in `.env`, never their values) if the variable isn't there. Copy `dist/lib.js` into your site's static files (e.g. `public/pagelens/lib.js`).
 
-**The key is visible to every visitor** (it sits in the page's HTML), so use a key with a low spending limit, or a free-tier key, and never one with access to anything else. This is fine for a prototype, not for production.
+**The key is visible to anyone who loads the page** (it is inside `lib.js`), so use a key with a low spending limit or a request quota, never one with access to anything else. Fine for a prototype, not for production. Don't commit `dist/`: it contains the key.
 
 ### 2. Mark the part of the page the assistant may use
 
@@ -26,7 +34,6 @@ Put the start tag where the assistant's region begins and the end tag where it e
 
   <script src="/pagelens/lib.js"
           data-start
-          data-api-key="YOUR_GEMINI_API_KEY"
           data-provider="gemini"></script>
 
   <main>...products, prices, FAQs, tables: what the assistant may read and point to...</main>
@@ -44,7 +51,6 @@ Attributes on the start tag:
 | Attribute | Default | Meaning |
 |---|---|---|
 | `data-start` | required | Marks this tag as the start of the region. |
-| `data-api-key` | required | Your Gemini API key. |
 | `data-provider` | `gemini` | The only provider so far. |
 | `data-model` | `gemini-3.5-flash-lite` | Model for both LLM steps. On rate limits (429) or overload (5xx) requests are retried with backoff, then fall back to `gemini-3.5-flash`. |
 | `data-navigator` | `llm` | `llm` (the explorer with tools) or `search` (the top search hit, no LLM; a baseline). |
@@ -59,7 +65,7 @@ Attributes on the start tag:
   ```tsx
   <main>
     {/* eslint-disable-next-line @next/next/no-sync-scripts */}
-    <script src="/pagelens/lib.js" data-start="" data-api-key="YOUR_GEMINI_API_KEY" data-provider="gemini" />
+    <script src="/pagelens/lib.js" data-start="" data-provider="gemini" />
     {children}
     <script data-pagelens-end="" />
   </main>
@@ -72,6 +78,7 @@ Serve the page over HTTP (`npx serve`, your dev server, or your host), not from 
 ### 4. What visitors get
 
 - A chat button in the bottom-right corner, drawn in its own Shadow DOM so your CSS can't affect it (and it can't affect your page).
+- While it works, a status line showing what it's doing ("Reading \"Delivery Options\"…") and the seconds elapsed.
 - Replies of 1 to 3 sentences, built only from the page's text. Every fact is cited; numbers must be quoted from the page or computed from quoted numbers, or the reply is not shown.
 - Numbered highlights (up to 5) on the elements the reply is based on; the page scrolls to the first, and the chat has a button per highlight.
 - "I couldn't find that on this page" when it isn't there, or "…might be under X" when it could be behind a link, a "See all" page, or a chart whose values aren't readable as text.
@@ -121,27 +128,19 @@ tests/                  question sets (cases.json, testset.json, freshset.json),
 
 ## Building
 
-Pages load `dist/lib.js`, which is generated and not committed. Build it after cloning, and after editing anything in `src/`:
+Pages load `dist/lib.js`, which is generated and not committed (it contains the API key). Build it after cloning, and after editing anything in `src/`:
 
 ```sh
-node build.js             # build once
-node build.js --watch     # rebuild on every save (leave it running; it restarts itself if build.js changes)
-node build.js --release   # build without the development API key (for anything you share or deploy)
+node build.js                       # build once, key from .env's GEMINI_API_KEY
+node build.js --key GEMINI_API_KEY_3   # use another .env variable as the key
+node build.js --watch --key key1    # rebuild on every save (leave it running; it restarts itself if build.js changes)
 ```
 
-### Development API key
-
-For local development, put your Gemini key in `.env` at the project root (git-ignored):
-
-```
-GEMINI_API_KEY=your-key-here
-```
-
-`build.js` bakes it into `dist/lib.js` as a fallback, so pages work without editing `data-api-key`. A real `data-api-key` on the start tag always wins; the dev key is used only when it's missing or a `YOUR_...` placeholder, and the console says so. The build output shows only the key's last 4 characters. Never deploy a dev build: use `--release`.
+The key comes only from the build (see "Using PageLens on your site"); there is no key attribute on the start tag. To switch keys, rebuild with another `--key`.
 
 ## Running the demo
 
-1. Open `demo/index.html` and replace `YOUR_GEMINI_API_KEY` in the start `<script>` tag with your Gemini API key (from Google AI Studio). Use a key with a low spending limit, because anyone who views the page can see it. Don't commit the key.
+1. Build the library with your key: `node build.js --key GEMINI_API_KEY` (see "Building").
 2. From the **project root** (not `demo/`), run:
 
    ```sh
@@ -203,7 +202,7 @@ A failed check is sent back once with the reasons; a second failure gives "I fou
 
 **What gets highlighted is exactly what the reply cites**, not the explorer's targets: each quote is narrowed to the smallest element holding it, then lifted to its record (a product card, a customer row), so a name and a price from one row are one highlight. Up to 5, numbered in reply order; the page scrolls to the first, and the chat shows a button per highlight that scrolls to it. The boxes are drawn in their own Shadow DOM layer over the page; the page itself is never changed.
 
-With `data-debug`, the chat message also shows the answer step's attempts and checks, the hand-off and the explorer's steps. `await PageLens.answer('...')` runs the whole pipeline from the console.
+While a question is being answered, the chat shows what PageLens is doing, taken from the explorer's real steps ("Searching this page for \"free delivery\"", "Reading \"Delivery Options\"", "Writing the answer"), with the seconds elapsed and "still working" after 15 s. The chat shows only the reply; with `data-debug`, the full journey (explorer turns, hand-off, answer step's attempts and checks) is printed to the browser console. `await PageLens.answer('...')` runs the whole pipeline from the console.
 
 ## Search
 
@@ -214,7 +213,7 @@ The explorer's `search(text)` tool ranks nodes two ways and merges the rankings 
 
 Search can be limited to one subtree with `within`, e.g. `search('snowboard jacket', 'n4')` ranks only the nodes inside `n4` (say, a product list), so nav links and other sections can't crowd the results. Empty results come with a hint on what to try next.
 
-Without a usable key (none, a `YOUR_...` placeholder, or one the API rejects), search uses keywords only. In the console, `await PageLens.debugSearch('jacket')` (or `debugSearch('jacket', 'n4')`) shows how each ranking placed the results.
+Without a usable key (a build without one, or a key the API rejects), search uses keywords only. In the console, `await PageLens.debugSearch('jacket')` (or `debugSearch('jacket', 'n4')`) shows how each ranking placed the results.
 
 ## Testing the explorer
 

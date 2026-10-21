@@ -68,7 +68,7 @@ export default function RootLayout({
 			</head>
 			<body className="bg-gray-50 text-gray-900 dark:bg-[#060606] dark:text-white">
 				{/* PageLens AI region starts */}
-				<script src="/pagelens/lib.js" data-start="" data-debug="" data-api-key="YOUR_GEMINI_API_KEY" data-provider="gemini" />
+				<script src="/pagelens/lib.js" data-start="" data-debug="" data-provider="gemini" />
 				<div className="mx-auto max-w-375">
 					{children}
 					<Footer name={site.name} logo={site.logo} />

@@ -106,7 +106,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                   src="/pagelens/lib.js"
                   data-start=""
                   data-debug=""
-                  data-api-key="YOUR_GEMINI_API_KEY"
                   data-provider="gemini"
                 />
                 {children}

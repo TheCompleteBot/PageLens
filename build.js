@@ -2,15 +2,14 @@
 // Joins the source files in src/ into the one file host pages include: dist/lib.js.
 // No dependencies. The files share one scope, wrapped in a single IIFE.
 //
-//   node build.js             build once
-//   node build.js --watch     rebuild whenever a file in src/ (or .env) changes
-//   node build.js --release   build without the development API key
-//   node build.js --key GEMINI_API_KEY_3   use another .env variable as the dev key
-//                             (works with --watch too)
+//   node build.js                        build once, with the key in .env's GEMINI_API_KEY
+//   node build.js --key GEMINI_API_KEY_3 use another .env variable as the key
+//   node build.js --watch                rebuild whenever a file in src/ (or .env) changes
 //
-// Development key: if .env (git-ignored) has GEMINI_API_KEY=..., it is baked into
-// dist/lib.js as a fallback for pages whose data-api-key is missing or a
-// placeholder. dist/ is git-ignored for this reason. Never ship a dev build.
+// API key: the Gemini key is read from .env (git-ignored) and baked into
+// dist/lib.js; this is the only way PageLens gets its key. dist/ is git-ignored
+// because it contains the key, and anyone who loads the page can read it, so use a
+// key with a low spending limit or a request quota.
 
 'use strict';
 
@@ -24,7 +23,6 @@ var FILES = ['init.js', 'extract.js', 'tree.js', 'gemini.js', 'search.js', 'trac
 var SRC = path.join(__dirname, 'src');
 var OUT = path.join(__dirname, 'dist', 'lib.js');
 var ENV = path.join(__dirname, '.env');
-var RELEASE = process.argv.includes('--release');
 var keyFlag = process.argv.indexOf('--key');
 var KEY_NAME = keyFlag === -1 ? 'GEMINI_API_KEY' : process.argv[keyFlag + 1];
 if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(KEY_NAME || '')) {
@@ -33,13 +31,17 @@ if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(KEY_NAME || '')) {
 }
 
 // KEY_NAME (default GEMINI_API_KEY) from .env, or '' (no file, no such line, or a release build).
-// When .env exists but has no usable line, warns with the variable names it does
-// contain (names only, never values), so a typo is easy to spot.
+// The value of KEY_NAME in .env, or ''. When there is no such line, warns with the
+// variable names .env does contain (names only, never values), so a typo is easy
+// to spot.
 var warnedAboutEnv = '';
-function readDevKey() {
-  if (RELEASE) return '';
+function readKey() {
   var env;
-  try { env = fs.readFileSync(ENV, 'utf8'); } catch (err) { return ''; }
+  try { env = fs.readFileSync(ENV, 'utf8'); } catch (err) {
+    if (warnedAboutEnv !== 'no .env') console.warn('No .env file: add ' + KEY_NAME + '=your-key to .env, then build again.');
+    warnedAboutEnv = 'no .env';
+    return '';
+  }
   var match = env.match(new RegExp('^\\s*' + KEY_NAME + '\\s*=\\s*["\']?([^"\'\\s#]+)', 'm'));
   if (match) return match[1];
   var names = (env.match(/^\s*[A-Za-z_][A-Za-z0-9_]*/gm) || []).map(function (n) { return n.trim(); });
@@ -54,7 +56,7 @@ var BANNER = [
   ' * PageLens — a drop-in chat widget that points users to the right place on a page.',
   ' *',
   ' * Include it with a script tag that marks the START of the AI region:',
-  ' *   <script src="lib.js" data-start data-api-key="..." data-provider="gemini"></script>',
+  ' *   <script src="lib.js" data-start data-provider="gemini"></script>',
   ' * and close the region with:',
   ' *   <script data-pagelens-end></script>',
   ' *',
@@ -71,16 +73,16 @@ function build() {
     var code = fs.readFileSync(path.join(SRC, name), 'utf8').replace(/\s+$/, '');
     return indent('// ---- src/' + name + ' ----\n\n' + code);
   });
-  var devKey = readDevKey();
+  var key = readKey();
   // Defined before src/init.js, which reads it.
-  var devKeyLine = indent('// Development API key from .env (empty in release builds).\n' +
-    'var DEV_API_KEY = ' + JSON.stringify(devKey) + ';');
-  var output = BANNER + '\n(function () {\n  \'use strict\';\n\n' + devKeyLine + '\n\n' +
+  var keyLine = indent('// Gemini API key, from .env (' + KEY_NAME + ') at build time.\n' +
+    'var API_KEY = ' + JSON.stringify(key) + ';');
+  var output = BANNER + '\n(function () {\n  \'use strict\';\n\n' + keyLine + '\n\n' +
     parts.join('\n\n') + '\n})();\n';
   fs.mkdirSync(path.dirname(OUT), { recursive: true });
   fs.writeFileSync(OUT, output);
   // Only the last 4 characters, so the key never ends up in a terminal log.
-  var keyNote = RELEASE ? 'release, no dev key' : devKey ? 'dev key ' + KEY_NAME + ' …' + devKey.slice(-4) : 'no dev key';
+  var keyNote = key ? 'key ' + KEY_NAME + ' …' + key.slice(-4) : 'NO API KEY: queries will fail';
   console.log('Built ' + path.relative(__dirname, OUT) + ' (' + output.length + ' bytes, ' + keyNote + ') at ' +
     new Date().toLocaleTimeString());
 }

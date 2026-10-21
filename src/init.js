@@ -13,9 +13,8 @@ var startMarker = document.currentScript || document.querySelector(START_SELECTO
 
 // Read from the start tag's data-* attributes. main.js stops if there is no start tag.
 var config = {
-  // A leftover placeholder like "YOUR_GEMINI_API_KEY" counts as no key. Without a
-  // real one, development builds fall back to DEV_API_KEY (set by build.js from .env).
-  apiKey: ((startMarker && startMarker.getAttribute('data-api-key')) || '').replace(/^YOUR_.*$/, '') || DEV_API_KEY,
+  // Set by build.js from .env (node build.js --key NAME).
+  apiKey: API_KEY,
   provider: ((startMarker && startMarker.getAttribute('data-provider')) || 'gemini').toLowerCase(),
   // The model the explorer uses (see gemini.js), and how it picks targets:
   // 'llm' (explore with tools) or 'search' (top search hit, no LLM; a baseline).

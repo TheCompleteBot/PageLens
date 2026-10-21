@@ -17,8 +17,9 @@ var MATCHES = ['found', 'maybe'];
 
 // Everything one query's exploration reads and writes, in one place. Navigators,
 // the result check and the trace all work on this object.
-function makeState(query, t) {
+function makeState(query, t, onProgress) {
   return {
+    onProgress: onProgress || null, // called with a short status line for the visitor
     query: query,
     tree: t,
     seen: t.seen,        // ids the navigator has been shown (filled by the tools)
@@ -36,8 +37,20 @@ function makeState(query, t) {
   };
 }
 
+// Tells the visitor what is happening, e.g. 'Reading "Delivery Options"…'. Uses page
+// labels and the explorer's search words, never node ids.
+function progress(state, text) {
+  if (state.onProgress) state.onProgress(text);
+}
+
+function progressLabel(state, id) {
+  var node = state.tree.byId.get(String(id));
+  return node ? clean(nodeLabel(node), 40) : '';
+}
+
 // The view every navigator starts from: the top level, plus search(query).
 function startExploring(state) {
+  progress(state, 'Searching this page');
   state.searches++;
   state.done.add(callKey('search', { text: state.query }));
   var journey = null;
@@ -267,6 +280,11 @@ function runToolInner(state, name, args) {
   }
   state.done.add(key);
   state.toolCalls++;
+
+  var label = progressLabel(state, args.id);
+  if (name === 'expand') progress(state, label ? 'Looking inside "' + label + '"' : 'Looking around the page');
+  if (name === 'read') progress(state, label ? 'Reading "' + label + '"' : 'Reading the page');
+  if (name === 'search') progress(state, 'Searching this page for "' + clean(args.text, 40) + '"');
 
   if (name === 'expand') return Promise.resolve(tools.expand(args.id));
   if (name === 'read') {
@@ -502,11 +520,12 @@ function handoff(state) {
 }
 
 // Runs the configured navigator on a query. Returns a Promise of the state.
-function explore(query) {
+// onProgress (optional): called with short status lines while it works.
+function explore(query, onProgress) {
   var navigate = NAVIGATORS[config.navigator];
   if (!navigate) return Promise.reject(new Error('Unknown data-navigator "' + config.navigator + '".'));
   var began = performance.now();
-  var state = makeState(query, buildTree());
+  var state = makeState(query, buildTree(), onProgress);
   state.treeMs = Math.round(performance.now() - began);
   return startExploring(state).then(navigate).then(checkResult).then(function (s) {
     s.handoff = handoff(s);

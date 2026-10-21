@@ -20,14 +20,12 @@ var WIDGET_CSS = [
   '.msg { max-width: 85%; padding: 8px 10px; border-radius: 10px; white-space: pre-wrap; overflow-wrap: anywhere; }',
   '.user { align-self: flex-end; background: #4f46e5; color: #fff; }',
   '.bot { align-self: flex-start; background: #fff; border: 1px solid #e5e7eb; }',
-  '.bot.wide { max-width: 100%; width: 100%; }',
   '.links { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }',
   '.link { border: 1px solid #f59e0b; background: #fffbeb; color: #92400e; border-radius: 12px; padding: 2px 9px;',
   '  font: 12px system-ui, sans-serif; cursor: pointer; }',
   '.link:hover { background: #fef3c7; }',
-  '.detail { margin: 6px 0 0; max-height: 280px; overflow: auto; padding: 6px; border-radius: 6px; background: #f3f4f6;',
-  '  font: 11px/1.4 ui-monospace, Menlo, monospace; white-space: pre; }',
   '.loading { color: #6b7280; }',
+  '.elapsed { margin-left: 6px; font-size: 12px; color: #9ca3af; }',
   '.loading::after { content: ""; animation: dots 1.2s steps(4, end) infinite; }',
   '@keyframes dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } }',
   'form { display: flex; gap: 6px; padding: 8px; border-top: 1px solid #e5e7eb; }',
@@ -100,8 +98,8 @@ function mountWidget() {
   if (config.debug) mountTreeView(root, panel, messages, form);
 
   // Adds a chat bubble. `links` (optional): [{ n, label }] buttons that scroll to
-  // highlight n. `detail` (optional, debug) is shown as a scrollable code block.
-  function addMessage(className, text, detail, links) {
+  // highlight n.
+  function addMessage(className, text, links) {
     var msg = document.createElement('div');
     msg.className = 'msg ' + className;
     msg.textContent = text;
@@ -118,16 +116,34 @@ function mountWidget() {
       });
       msg.appendChild(row);
     }
-    if (detail) {
-      msg.classList.add('wide');
-      var pre = document.createElement('pre');
-      pre.className = 'detail';
-      pre.textContent = detail;
-      msg.appendChild(pre);
-    }
     messages.appendChild(msg);
     messages.scrollTop = messages.scrollHeight;
     return msg;
+  }
+
+  // A status bubble while a question is being answered: what PageLens is doing right
+  // now (from the explorer's real steps), and the seconds elapsed, so the visitor can
+  // tell it's working. Text is set with textContent only.
+  function showProgress() {
+    var msg = addMessage('bot loading', '');
+    var text = document.createElement('span');
+    var elapsed = document.createElement('span');
+    elapsed.className = 'elapsed';
+    msg.appendChild(text);
+    msg.appendChild(elapsed);
+    var started = Date.now();
+    var current = 'Thinking';
+    function render() {
+      var secs = Math.floor((Date.now() - started) / 1000);
+      text.textContent = current;
+      elapsed.textContent = secs >= 15 ? secs + ' s · still working' : secs >= 2 ? secs + ' s' : '';
+    }
+    render();
+    var timer = setInterval(render, 1000);
+    return {
+      update: function (line) { current = line; render(); messages.scrollTop = messages.scrollHeight; },
+      remove: function () { clearInterval(timer); msg.remove(); }
+    };
   }
 
   addMessage('bot', "Hi! Tell me what you're looking for and I'll point you to it on this page.");
@@ -140,15 +156,15 @@ function mountWidget() {
     addMessage('user', query);
     input.value = '';
     send.disabled = true;
-    var loading = addMessage('bot loading', 'Thinking');
+    var status = showProgress();
 
-    answerQuery(query)
+    answerQuery(query, status.update)
       .then(function (reply) {
-        loading.remove();
-        addMessage('bot', reply.text, reply.detail, reply.links);
+        status.remove();
+        addMessage('bot', reply.text, reply.links);
       })
       .catch(function (err) {
-        loading.remove();
+        status.remove();
         console.error(LOG_PREFIX, err);
         addMessage('bot', 'Sorry, something went wrong. Please try again.');
       })

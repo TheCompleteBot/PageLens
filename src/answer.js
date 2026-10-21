@@ -271,6 +271,7 @@ function answerStep(state) {
   var contents = [{ role: 'user', parts: [{ text: answerInput(h) }] }];
   function attempt() {
     var began = performance.now();
+    progress(state, result.attempts.length ? 'Double-checking the answer against the page' : 'Writing the answer');
     return geminiGenerate({
       systemInstruction: { parts: [{ text: ANSWER_PROMPT }] },
       contents: contents,
