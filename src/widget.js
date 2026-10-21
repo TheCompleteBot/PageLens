@@ -1,6 +1,8 @@
 // Step 5 — Chat widget.
 // Rendered in Shadow DOM so host-page CSS can't affect it. With data-debug, it
-// also has a Tree view showing the page tree the explorer AI walks.
+// also has a Tree view showing the page tree the explorer AI walks. On phones
+// (NARROW_SCREEN) the panel is a bottom sheet over the lower part of the screen,
+// so highlights scrolled to the top stay visible above it.
 
 var WIDGET_CSS = [
   ':host { all: initial; }',
@@ -55,7 +57,21 @@ var WIDGET_CSS = [
   '.nlabel:hover { text-decoration: underline; }',
   '.ncount { color: #9ca3af; margin-left: 4px; }',
   '.overlay { position: fixed; z-index: 2147483646; pointer-events: none; display: none;',
-  '  outline: 2px solid #f59e0b; background: rgba(245,158,11,.15); border-radius: 3px; }'
+  '  outline: 2px solid #f59e0b; background: rgba(245,158,11,.15); border-radius: 3px; }',
+  // Phones: a bottom sheet, larger tap targets, and 16px input text (smaller makes iOS zoom in).
+  '@media ' + NARROW_SCREEN + ' {',
+  '  .launcher { right: 12px; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }',
+  '  .launcher.open { display: none; }',
+  '  .panel, .panel.wide-mode { left: 0; right: 0; bottom: 0; width: 100%; height: 55vh; height: 55dvh;',
+  '    border-radius: 16px 16px 0 0; padding-bottom: env(safe-area-inset-bottom, 0px); font-size: 15px; }',
+  '  .panel.wide-mode { height: 85vh; height: 85dvh; }',
+  '  .head { padding: 6px 6px 6px 14px; }',
+  '  .close { width: 44px; height: 44px; font-size: 26px; }',
+  '  .msg { max-width: 90%; }',
+  '  .link { padding: 6px 12px; font-size: 13px; }',
+  '  input { font-size: 16px; padding: 10px 12px; }',
+  '  .send { padding: 10px 14px; }',
+  '}'
 ].join('\n');
 
 // Static markup only. Page text and model output are inserted with textContent, never innerHTML.
@@ -90,6 +106,8 @@ function mountWidget() {
 
   function setOpen(open) {
     panel.hidden = !open;
+    launcher.classList.toggle('open', open);
+    launcher.setAttribute('aria-expanded', String(open));
     if (open) input.focus();
   }
   launcher.addEventListener('click', function () { setOpen(panel.hidden); });
@@ -156,6 +174,8 @@ function mountWidget() {
     addMessage('user', query);
     input.value = '';
     send.disabled = true;
+    // On phones, close the keyboard so the page (and the highlights) can be seen.
+    if (isNarrowScreen()) input.blur();
     var status = showProgress();
 
     answerQuery(query, status.update)
@@ -170,7 +190,7 @@ function mountWidget() {
       })
       .then(function () {
         send.disabled = false;
-        input.focus();
+        if (!isNarrowScreen()) input.focus();
       });
   });
 }

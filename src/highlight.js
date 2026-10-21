@@ -21,6 +21,14 @@ var HIGHLIGHT_CSS = [
 
 var HIGHLIGHT_VISIBLE_MS = 5000;
 
+// Phones and narrow windows: the chat is a bottom sheet (widget.js), so highlights
+// are scrolled to the top of the screen instead of the middle.
+var NARROW_SCREEN = '(max-width: 600px)';
+
+function isNarrowScreen() {
+  return window.matchMedia(NARROW_SCREEN).matches;
+}
+
 var highlightLayer = null; // { root, boxes: [{ el, box }] }
 var fadeTimer = null;
 
@@ -109,7 +117,7 @@ function focusHighlight(n) {
   if (!b || !b.el.isConnected) return;
   b.box.classList.remove('gone');
   scheduleFade();
-  b.el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  b.el.scrollIntoView({ block: isNarrowScreen() ? 'start' : 'center', behavior: 'smooth' });
   b.box.classList.remove('flash');
   void b.box.offsetWidth; // restart the animation
   b.box.classList.add('flash');
