@@ -200,7 +200,10 @@ const EXPLORE = (q) => `(${WITH_ANSWER} ? PageLens.answer(${JSON.stringify(q)}).
   if (s.answer) {
     var a = s.answer;
     var aTokens = 0;
-    a.attempts.forEach(function (at) { aTokens += (at.tokens && at.tokens.totalTokenCount) || 0; });
+    a.attempts.forEach(function (at) {
+      aTokens += (at.tokens && at.tokens.totalTokenCount) || 0;
+      if (at.judge) aTokens += (at.judge.tokens && at.judge.tokens.totalTokenCount) || 0;
+    });
     out.answer = { status: a.status, reply: a.reply, attempts: a.attempts.length, ms: a.ms, tokens: aTokens,
       firstPass: !!a.attempts.length && !a.attempts[0].problems.length,
       problems: [].concat.apply([], a.attempts.map(function (at) { return at.problems; })),

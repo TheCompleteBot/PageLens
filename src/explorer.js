@@ -1,6 +1,6 @@
 // Step 3 — Explorer: finds the node(s) that answer a query.
 // A navigator is any function navigate(state) -> Promise(state) that sets
-// state.result = { action: 'highlight' | 'answer' | 'abstain', targets: [id] }.
+// state.result = { action: 'highlight' | 'answer' | 'abstain' | 'greet', targets: [id] }.
 // The explorer only picks nodes; it writes no text at all (finish has no free-text
 // field), so it can be wrong about which node but can't invent facts. handoff(state)
 // then packages the page text it read for the answer step, like retrieved chunks in RAG.
@@ -97,6 +97,9 @@ var EXPLORER_PROMPT = [
   '- search(text, within?): ranked keyword + meaning matches on the whole page, or only inside node `within`.',
   '  Results are candidates, not proof; each shows where it sits ("path").',
   '- finish(action, targets, match?): your final choice. Ends this step.',
+  '- greet(): only when the message is just a greeting (hi, hello, hey, good morning) with no question or request.',
+  '  A fixed welcome is shown; nothing on the page is pointed to. If a greeting comes with a request ("hi, where',
+  '  are the laptops?"), explore the request instead.',
   '</can>',
   '',
   '<cannot>',
@@ -219,6 +222,11 @@ var EXPLORER_TOOLS = [{ functionDeclarations: [
       },
       required: ['action', 'targets']
     }
+  },
+  {
+    name: 'greet',
+    description: 'The message is only a greeting, with no question or request. Ends the exploration.',
+    parameters: { type: 'object', properties: {} }
   }
 ] }];
 
@@ -258,6 +266,7 @@ function runTool(state, name, args) {
 }
 
 function runToolInner(state, name, args) {
+  if (name === 'greet') return Promise.resolve({ error: 'greet is only for a message that is just a greeting. Call finish.' });
   var key = callKey(name, args);
   if (state.done.has(key)) {
     return Promise.resolve({ error: name === 'search'
@@ -360,6 +369,14 @@ function llmNavigator(state) {
         return next();
       }
 
+      // A greeting ends the run straight away, but only before any exploring: a
+      // message that needed tools was not just a greeting.
+      if (!state.toolCalls && calls.some(function (c) { return c.name === 'greet'; })) {
+        step.calls.push({ name: 'greet', args: {} });
+        state.result = { action: 'greet', targets: [], match: '' };
+        return state;
+      }
+
       // A finish ends the run (other calls in the same turn are ignored), if it passes the check.
       var finish = calls.filter(function (c) { return c.name === 'finish'; })[0];
       if (finish) {
@@ -427,6 +444,7 @@ var NAVIGATORS = { llm: llmNavigator, search: searchNavigator };
 // another target are dropped (a product card already contains its price).
 function checkResult(state) {
   var r = state.result || { action: 'abstain', targets: [] };
+  if (r.action === 'greet') return state;
   var problem = finishProblem(state, r);
   if (problem) {
     state.result = { action: 'abstain', targets: [], note: 'invalid result: ' + problem };
@@ -472,7 +490,7 @@ function handoff(state) {
     sources: sources.map(function (node) { return { id: node.id, path: pathOf(node), text: plainText(node) }; }),
     context: []
   };
-  if (r.action === 'abstain') return out;
+  if (r.action === 'abstain' || r.action === 'greet') return out;
 
   var included = sources.slice();
   var used = out.sources.reduce(function (n, s) { return n + s.text.length; }, 0);

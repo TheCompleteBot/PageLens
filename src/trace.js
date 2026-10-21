@@ -165,6 +165,11 @@ function logAnswerStep(number, a) {
     a.attempts.forEach(function (at, i) {
       console.log('Attempt ' + (i + 1) + ' (' + at.model + ', ' + at.ms + ' ms' +
         (at.tokens ? ', ' + at.tokens.totalTokenCount + ' tokens' : '') + '):', at.output);
+      if (at.judge) {
+        console.log('  Guardrail (' + at.judge.model + ', ' + at.judge.ms + ' ms):', at.judge.claims.map(function (c) {
+          return c.verdict + ': ' + c.claim;
+        }));
+      }
       at.problems.forEach(function (p) { console.log('  ✗ ' + p); });
     });
     a.highlights.forEach(function (h) { console.log('Highlight ' + h.n + ': ' + h.id + ' "' + h.label + '"', h.el); });

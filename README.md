@@ -89,7 +89,7 @@ Serve the page over HTTP (`npx serve`, your dev server, or your host), not from 
 
 - A chat button in the bottom-right corner, drawn in its own Shadow DOM so your CSS can't affect it (and it can't affect your page).
 - While it works, a status line showing what it's doing ("Reading \"Delivery Options\"…") and the seconds elapsed.
-- Replies of 1 to 3 sentences, built only from the page's text. Every fact is cited; numbers must be quoted from the page or computed from quoted numbers, or the reply is not shown.
+- Replies of 1 to 3 sentences, built only from the page's text. Every fact is cited and checked against the cited page text by a guardrail, or the reply is not shown.
 - Numbered highlights (up to 5) on the elements the reply is based on; the page scrolls to the first, and the chat has a button per highlight.
 - "I couldn't find that on this page" when it isn't there, or "…might be under X" when it could be behind a link, a "See all" page, or a chart whose values aren't readable as text.
 
@@ -103,7 +103,7 @@ The visitor's question and the visible text of your marked region (as a compact 
 - **Infinite scroll and lazy-loaded content** (not yet loaded) can't be read. Out of scope for now.
 - **Guide only:** it highlights and scrolls; it never clicks, types, fills forms or navigates. It only knows the current page.
 - **Text only:** no images, and no values drawn in charts (only a chart's labels).
-- **English only.** Gemini is the only provider. A question takes about 5–15 s (3–5 LLM calls: 2–4 for the explorer, 1 for the answer); free-tier keys are rate-limited.
+- **English only.** Gemini is the only provider. A question takes about 5–15 s (4–6 LLM calls: 2–4 for the explorer, 1 for the answer, 1 for the guardrail); free-tier keys are rate-limited.
 - Long paragraphs are cut at about 200 characters in the page tree, so facts at the end of long text can be missed.
 - **The API key is public.** It is written into `lib.js` (open the file, or DevTools → Sources) and sent with every request (DevTools → Network, the `x-goog-api-key` header), so anyone visiting the page can copy it. Only a backend that holds the key and forwards the requests would hide it; until then, use a key with a low spending limit or a daily request quota.
 
@@ -206,9 +206,13 @@ Budget rules: every tool result says how many calls and searches are left; a sea
 The answer step (`src/answer.js`, same model as the explorer) gets only the hand-off and returns JSON: a short `reply` with markers like `[1]`, and `citations`, each an id from the hand-off plus the exact words quoted from it. Code checks it before anything is shown:
 
 - every citation id is in the hand-off, and its quote is found word for word in that text (case, dashes and separators ignored);
-- every number in the reply appears in a quote, or follows from quoted numbers by simple arithmetic (a sum, a difference, a ratio, the total), or is a small count.
+- the reply is not empty and cites something.
+
+Then a **groundedness guardrail** checks the facts: a second LLM call (the "judge", flash-lite) gets the reply and the full text of the elements it cites, splits the reply into claims, and labels each one `supported`, `contradicted`, `not_found` or `not_a_fact` (a hedge or an offer to help). A supported claim must come with the exact page words that prove it, and code checks those words really are in the cited elements; a sum or difference passes when the numbers it uses are on the page. Any claim that is not supported fails the check, with the judge's reason (e.g. "is wrong: the page says ₹40").
 
 A failed check is sent back once with the reasons; a second failure gives "I found related information on this page, but couldn't confirm an exact answer", with nothing highlighted. `abstain` needs no LLM call.
+
+**Greetings:** a message that is only a greeting ("hi", "good morning") makes the explorer call its `greet` tool as its first move; the chat then shows a fixed welcome explaining what PageLens does, with no answer step and nothing highlighted. A greeting with a request ("hello, is delivery free?") is answered normally.
 
 **What gets highlighted is exactly what the reply cites**, not the explorer's targets: each quote is narrowed to the smallest element holding it, then lifted to its record (a product card, a customer row), so a name and a price from one row are one highlight. Up to 5, numbered in reply order; the page scrolls to the first, and the chat shows a button per highlight that scrolls to it. The boxes are drawn in their own Shadow DOM layer over the page; the page itself is never changed.
 
