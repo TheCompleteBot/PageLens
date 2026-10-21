@@ -30,6 +30,7 @@ A copy built with the project owner's key is published on GitHub Pages, for peop
 
 - Library: `https://thecompletebot.github.io/PageLens/lib.js`
 - Live demo: `https://thecompletebot.github.io/PageLens/demo/`
+- Live example dashboard: `https://thecompletebot.github.io/PageLens/dashboard/`
 
 Use it like a local copy, with `src="https://thecompletebot.github.io/PageLens/lib.js"` in the start tag (step 2). It is rebuilt and redeployed on every push to `main` by `.github/workflows/deploy.yml`, which takes the key from the repository secret `PAGELENS_GEMINI_KEY`; the built file never enters the repo. To set it up on a fork: add that secret (Settings → Secrets and variables → Actions) and set Settings → Pages → Source to **GitHub Actions**. The hosted `lib.js` contains the key, so use a dedicated key with a daily request quota, and share the link only with people you trust.
 

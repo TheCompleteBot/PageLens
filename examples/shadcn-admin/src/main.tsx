@@ -75,6 +75,8 @@ const queryClient = new QueryClient({
 // Create a new router instance
 const router = createRouter({
   routeTree,
+  // PageLens: lets the app run under a sub-path (vite --base), e.g. on GitHub Pages.
+  basepath: import.meta.env.BASE_URL,
   context: { queryClient },
   defaultPreload: 'intent',
   defaultPreloadStaleTime: 0,

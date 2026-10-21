@@ -19,6 +19,7 @@ Our only changes to each app:
   - `app-landing/`: in `src/app/layout.tsx`, around the page content and footer.
   - `blog/`: in `app/layout.tsx`, inside `<main>` around `{children}` (the header and footer stay outside the region). Placed directly in `<body>` next to the client components, React rendered the two marker tags a second time, so the page had two start/end pairs and PageLens paired the wrong ones.
 - `public/pagelens/lib.js`: a symlink to `../../../../dist/lib.js`, so the app always serves the latest build.
+- `shadcn-admin/src/main.tsx`: the router's `basepath` is set to Vite's base URL (one line), so the dashboard can also be hosted under a sub-path; it is `/` in development, so nothing changes locally. The deploy workflow publishes it at `https://thecompletebot.github.io/PageLens/dashboard/`.
 
 ## Running them
 
