@@ -1,4 +1,5 @@
 import { useContext, useEffect } from "react";
+import { useLocation } from "react-router-dom";
 import { Card } from "../../components/Card";
 import { ProductDetail } from "../../components/ProductDetail";
 import { ShoppingCartContext } from "../../Context";
@@ -10,9 +11,11 @@ function Home() {
     filteredItems,
     updateCategoryPath
   } = useContext(ShoppingCartContext);
+  // The router's path, without the base URL (the app may be hosted under a sub-path).
+  const { pathname } = useLocation();
 
   useEffect(() => {
-    updateCategoryPath(window.location.pathname);
+    updateCategoryPath(pathname);
   }, []);
 
   return (

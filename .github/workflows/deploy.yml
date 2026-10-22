@@ -2,7 +2,11 @@
 # publishes it to GitHub Pages, without the built file ever entering the repo:
 #   https://<user>.github.io/PageLens/lib.js         the library
 #   https://<user>.github.io/PageLens/demo/          the demo store, using it
-#   https://<user>.github.io/PageLens/dashboard/     the example admin dashboard (examples/shadcn-admin)
+#   https://<user>.github.io/PageLens/               a page linking the examples below
+#   https://<user>.github.io/PageLens/dashboard/     admin dashboard   (examples/shadcn-admin)
+#   https://<user>.github.io/PageLens/storefront/    online store      (examples/storefront)
+#   https://<user>.github.io/PageLens/restaurant/    restaurant site   (examples/restaurant)
+#   https://<user>.github.io/PageLens/app-landing/   app landing page  (examples/app-landing)
 #
 # One-time setup on GitHub:
 #   Settings → Secrets and variables → Actions → New repository secret: PAGELENS_GEMINI_KEY
@@ -56,19 +60,21 @@ jobs:
         run: |
           mkdir -p site/demo
           cp dist/lib.js site/lib.js
+          cp scripts/site-index.html site/index.html
           # The demo loads the library from the site root.
           sed 's#src="/dist/lib.js"#src="../lib.js"#' demo/index.html > site/demo/index.html
           grep -q 'src="../lib.js"' site/demo/index.html
 
-      - name: Build the example dashboard
-        working-directory: examples/shadcn-admin
+      - name: Install the example apps' dependencies
         run: |
-          npx --yes pnpm@9 install --frozen-lockfile
-          npx vite build --base=/PageLens/dashboard/ --outDir ../../site/dashboard
-          # Use the one shared lib.js, not the copy Vite took from public/pagelens/.
-          rm -rf ../../site/dashboard/pagelens
-          sed -i 's#src="/PageLens/dashboard/pagelens/lib.js"#src="/PageLens/lib.js"#' ../../site/dashboard/index.html
-          grep -q 'src="/PageLens/lib.js"' ../../site/dashboard/index.html
+          (cd examples/shadcn-admin && npx --yes pnpm@9 install --frozen-lockfile)
+          (cd examples/storefront && npm ci)
+          (cd examples/restaurant && npm ci)
+          (cd examples/app-landing && npx --yes pnpm@12.4.1 install --frozen-lockfile)
+
+      # Each example at /PageLens/<name>/, loading the shared /PageLens/lib.js.
+      - name: Build the example apps
+        run: scripts/build-examples.sh site
 
       - uses: actions/configure-pages@v5
 

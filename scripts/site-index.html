@@ -1,0 +1,92 @@
+<!doctype html>
+<!-- The GitHub Pages landing page (/PageLens/): links every example with questions to try.
+     Copied to site/index.html by .github/workflows/deploy.yml. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PageLens examples</title>
+  <style>
+    :root {
+      --bg: #f7f8fb; --card: #ffffff; --text: #111827; --muted: #6b7280; --border: #e5e7eb;
+      --accent: #4f46e5; --chip: #eef2ff; --chip-text: #3730a3; --note: #92400e; --note-bg: #fffbeb;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --bg: #0f1117; --card: #171a23; --text: #e5e7eb; --muted: #9ca3af; --border: #2a2f3b;
+        --accent: #818cf8; --chip: #1e2140; --chip-text: #c7d2fe; --note: #fcd34d; --note-bg: #2a2410;
+      }
+    }
+    :root[data-theme="dark"] {
+      --bg: #0f1117; --card: #171a23; --text: #e5e7eb; --muted: #9ca3af; --border: #2a2f3b;
+      --accent: #818cf8; --chip: #1e2140; --chip-text: #c7d2fe; --note: #fcd34d; --note-bg: #2a2410;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text);
+      font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+    main { max-width: 960px; margin: 0 auto; padding: 40px 16px 64px; }
+    h1 { font-size: 32px; margin: 0 0 8px; }
+    .lead { color: var(--muted); margin: 0 0 32px; max-width: 680px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px;
+      display: flex; flex-direction: column; gap: 10px; }
+    .card h2 { font-size: 19px; margin: 0; }
+    .card h2 a { color: var(--accent); text-decoration: none; }
+    .card h2 a:hover { text-decoration: underline; }
+    .kind { color: var(--muted); font-size: 14px; margin: 0; }
+    .try { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 6px; }
+    .try li { background: var(--chip); color: var(--chip-text); border-radius: 999px; padding: 3px 10px; font-size: 13px; }
+    .note { background: var(--note-bg); color: var(--note); border-radius: 8px; padding: 6px 10px; font-size: 13px; margin: 0; }
+    .how { margin-top: 36px; color: var(--muted); font-size: 14px; }
+    code { font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>PageLens examples</h1>
+    <p class="lead">
+      The same <code>lib.js</code> added to different kinds of websites with two script tags, and no other code changes.
+      Open one, click the 💬 button at the bottom right, and ask about the page: PageLens points to the right place
+      or answers from the page's text, and says so when something isn't on the page.
+    </p>
+
+    <div class="grid">
+      <section class="card">
+        <h2><a href="demo/">Online store (demo)</a></h2>
+        <p class="kind">Plain HTML page built for PageLens</p>
+        <ul class="try"><li>is delivery free?</li><li>what would the power bank cost with express delivery?</li><li>do you sell laptops?</li></ul>
+      </section>
+
+      <section class="card">
+        <h2><a href="dashboard/">Admin dashboard</a></h2>
+        <p class="kind">React + Vite app (shadcn-admin)</p>
+        <ul class="try"><li>what is the total sales this month?</li><li>who was the biggest customer in recent sales?</li><li>what is our profit?</li></ul>
+      </section>
+
+      <section class="card">
+        <h2><a href="storefront/">Shopping site</a></h2>
+        <p class="kind">React + Vite app, products loaded from an API</p>
+        <ul class="try"><li>do you sell jewelry?</li><li>how much is the backpack?</li><li>where do I sign in?</li></ul>
+      </section>
+
+      <section class="card">
+        <h2><a href="restaurant/">Restaurant</a></h2>
+        <p class="kind">React + Vite one-page site</p>
+        <ul class="try"><li>What are your opening hours on Saturday?</li><li>how do I book a table?</li><li>do you have vegan dishes?</li></ul>
+        <p class="note">Scroll to the bottom once first: sections fade in as you scroll, and hidden content isn't read.</p>
+      </section>
+
+      <section class="card">
+        <h2><a href="app-landing/">App landing page</a></h2>
+        <p class="kind">Next.js static site</p>
+        <ul class="try"><li>how much is the pro plan?</li><li>where can I download the app?</li><li>is there a free trial?</li></ul>
+        <p class="note">Scroll to the bottom once first, for the same reason.</p>
+      </section>
+    </div>
+
+    <p class="how">
+      Try a greeting ("hi") too, or something that isn't on the page. On a phone, the chat opens as a bottom sheet.
+    </p>
+  </main>
+</body>
+</html>

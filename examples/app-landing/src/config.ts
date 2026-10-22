@@ -6,6 +6,9 @@ import type {
 	SocialLink,
 } from "@/types";
 
+/** Prefix for files in public/ when hosted under a sub-path (next/image doesn't add basePath); empty in development. */
+const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+
 export const storeConfig = {
 	/** Set to true to pull live metadata from the App Store at build time */
 	fetchRealData: false,
@@ -18,7 +21,7 @@ export const site = {
 	url: "https://your-domain.com",
 	description:
 		"Here you can write a brief description of your application. Tell users about its main features and benefits in 1-2 sentences.",
-	logo: "/favicon.svg",
+	logo: `${basePath}/favicon.svg`,
 	keywords: ["mobile app", "landing page", "nextjs", "react", "typescript"],
 	storeLinks: {
 		apple: "#",
@@ -77,14 +80,14 @@ export const features: Feature[] = [
 ];
 
 export const screenshots: string[] = [
-	"/assets/screenshots/1.png",
-	"/assets/screenshots/1.png",
-	"/assets/screenshots/1.png",
-	"/assets/screenshots/1.png",
-	"/assets/screenshots/1.png",
-	"/assets/screenshots/1.png",
-	"/assets/screenshots/1.png",
-	"/assets/screenshots/1.png",
+	`${basePath}/assets/screenshots/1.png`,
+	`${basePath}/assets/screenshots/1.png`,
+	`${basePath}/assets/screenshots/1.png`,
+	`${basePath}/assets/screenshots/1.png`,
+	`${basePath}/assets/screenshots/1.png`,
+	`${basePath}/assets/screenshots/1.png`,
+	`${basePath}/assets/screenshots/1.png`,
+	`${basePath}/assets/screenshots/1.png`,
 ];
 
 export const pricingTiers: PricingTier[] = [
